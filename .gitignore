@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Env / secrets
+.env
+config/*.env
+config/local.yaml
+
+# Runtime data (per-event content, captured photos, DBs, logs — not source)
+/data/
+/out/
+*.db
+*.db-wal
+*.db-shm
+bench_results*.db
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.svelte-kit/
+
+# Fixtures are tracked, but keep the dir from vanishing when empty
+!fixtures/shots/.gitkeep
+!events/.gitkeep
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

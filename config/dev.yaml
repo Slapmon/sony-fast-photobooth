@@ -1,0 +1,36 @@
+# Dev profile: runs entirely on a laptop, no hardware required.
+# Same shape as config/pi.yaml — only the backend selections differ.
+# See IMPLEMENTATION_PLAN.md §3.
+
+profile: dev
+
+camera:
+  backend: mock
+  mock:
+    fixtures_dir: fixtures/shots
+    trigger_delay_ms: 250
+    thumb_latency_ms: 150
+    full_download_mbps: 40.0
+
+preview:
+  # Point go2rtc at a laptop webcam, or loop a video file:
+  #   exec:ffmpeg -stream_loop -1 -i fixtures/preview.mp4 -f mjpeg -c:v copy -
+  stream_url: "http://127.0.0.1:1984/api/stream.mjpeg?src=photobooth"
+
+printing:
+  backend: null
+  null_backend:
+    output_dir: out/prints
+    simulated_job_seconds: 13
+
+delivery:
+  backend: local
+  local:
+    output_dir: out/uploads
+
+storage:
+  sqlite_path: out/photobooth.db
+
+web:
+  host: 127.0.0.1
+  port: 8000

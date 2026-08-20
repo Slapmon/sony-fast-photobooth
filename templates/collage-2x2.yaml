@@ -1,0 +1,26 @@
+# Example template — see photobooth-plan.md §8 for the full schema rationale.
+# {event.*} placeholders resolve from the active event's event.yaml (T-2.7).
+name: "Classic 2x2"
+canvas:
+  width_mm: 152
+  height_mm: 102
+  dpi: 300
+  background: "#ffffff"
+slots:
+  - { x: 40,  y: 40,  w: 840, h: 560, fit: cover }
+  - { x: 915, y: 40,  w: 840, h: 560, fit: cover }
+  - { x: 40,  y: 635, w: 840, h: 560, fit: cover }
+  - { x: 915, y: 635, w: 840, h: 560, fit: cover }
+overlays:
+  - { type: image, src: "assets/frame.png", x: 0, y: 0, w: 1795, h: 1205 }
+  - type: text
+    content: "{event.couple} · {event.date}"
+    font: "assets/GreatVibes.ttf"
+    size: 64
+    color: "#3a3a3a"
+    anchor: bottom-center
+    y_offset: -30
+variants:
+  print: { dpi: 300, format: jpeg, quality: 95 }
+  web:   { long_edge: 2000, format: jpeg, quality: 85 }
+  thumb: { long_edge: 400,  format: jpeg, quality: 75 }

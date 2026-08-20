@@ -1,0 +1,33 @@
+# Pi profile: real hardware backends. Requires the `pi` extra
+# (python-gphoto2, pyvips, pycups) and system libraries (libgphoto2, libvips,
+# CUPS) to be present. See IMPLEMENTATION_PLAN.md §3 and §6 for the Phase 0
+# settings that must be locked down on the camera before this is trustworthy.
+
+profile: pi
+
+camera:
+  backend: gphoto
+  gphoto:
+    jpeg_size: S   # revisit once Phase 0 T-C5/T-C6 pick the real ceiling
+
+preview:
+  stream_url: "http://127.0.0.1:1984/api/stream.mjpeg?src=photobooth"
+
+printing:
+  backend: cups
+  cups:
+    printer_name: ""   # fill in after `lpstat -p`
+    print_limit_per_session: 2
+
+delivery:
+  backend: sftp
+  sftp:
+    host: ""
+    remote_path: ""
+
+storage:
+  sqlite_path: /var/lib/photobooth/photobooth.db
+
+web:
+  host: 0.0.0.0
+  port: 8000
