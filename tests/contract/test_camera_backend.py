@@ -1,8 +1,12 @@
 """Runs the same assertions against every CameraBackend implementation.
 
 This is what makes the mock trustworthy — if it drifts from real hardware
-behaviour, this suite is meant to catch it once GphotoBackend is real and
-run with --hardware (IMPLEMENTATION_PLAN.md §4.5).
+behaviour, this suite is meant to catch it. The `gphoto` param is marked
+`hardware` (pyproject.toml's `addopts = "-m 'not hardware'"` skips it by
+default on a machine with no camera attached); run it explicitly with
+`pytest -m hardware` on the Pi with the a6400 connected and in PC Remote
+mode. GphotoBackend's own import is deferred inside the fixture so this
+module still collects fine on a machine without python-gphoto2 installed.
 """
 
 from __future__ import annotations
@@ -16,14 +20,15 @@ from photobooth.camera.mock import MockBackend
 from photobooth.camera.protocol import CameraBackend, CameraDisconnectedError
 
 
-@pytest.fixture(params=["mock"])
+@pytest.fixture(params=["mock", pytest.param("gphoto", marks=pytest.mark.hardware)])
 def backend(request: pytest.FixtureRequest, fixtures_dir: Path) -> Iterator[CameraBackend]:
+    b: CameraBackend
     if request.param == "mock":
-        b: CameraBackend = MockBackend(
-            fixtures_dir=fixtures_dir, trigger_delay_ms=0, thumb_latency_ms=0
-        )
-    else:  # pragma: no cover - real hardware, opt in with --hardware
-        pytest.skip("hardware backend not selected")
+        b = MockBackend(fixtures_dir=fixtures_dir, trigger_delay_ms=0, thumb_latency_ms=0)
+    else:
+        from photobooth.camera.gphoto import GphotoBackend
+
+        b = GphotoBackend(jpeg_size="S")
     b.connect()
     yield b
     b.disconnect()

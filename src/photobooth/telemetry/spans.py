@@ -28,3 +28,22 @@ def span(conn: sqlite3.Connection, name: str, capture_id: str, **meta: object) -
             (capture_id, name, t_start, t_end, json.dumps(meta)),
         )
         conn.commit()
+
+
+def record_duration(
+    conn: sqlite3.Connection, name: str, capture_id: str, duration_s: float, **meta: object
+) -> None:
+    """Record a span whose duration was measured elsewhere (e.g. the
+    browser's own decode timer, reported back over the WebSocket) rather
+    than by wrapping the call here. t_end is "now"; t_start is back-computed
+    from the reported duration — server and browser clocks aren't the same
+    clock, so only the delta is meaningful, same as for span() above.
+    """
+    import json
+
+    t_end = time.monotonic()
+    conn.execute(
+        "INSERT INTO spans (capture_id, name, t_start, t_end, meta_json) VALUES (?, ?, ?, ?, ?)",
+        (capture_id, name, t_end - duration_s, t_end, json.dumps(meta)),
+    )
+    conn.commit()

@@ -51,6 +51,16 @@ class CameraBackend(ABC):
         """Cheap liveness check for the preflight/heartbeat, not a full capture."""
 
     @abstractmethod
+    def trigger_autofocus(self) -> None:
+        """Standalone AF trigger, not tied to a capture.
+
+        The booth normally pre-focuses once at a fixed distance
+        (photobooth-plan.md §3.4) rather than calling this per shot — it
+        exists for admin/preflight tooling. A backend with no real AF
+        control (MockBackend) may implement this as a no-op.
+        """
+
+    @abstractmethod
     def trigger_capture(self) -> str:
         """Fire the shutter. Returns a capture_id used to correlate downloads."""
 

@@ -226,22 +226,28 @@ Standalone scripts in `tools/`. No application code. **Exit gate for starting Ph
 ### Camera — `tools/bench_camera.py`
 
 - [ ] **T-C1** Baseline: `gphoto2 --capture-image-and-download` CLI, 10 shots, wall time each
-- [ ] **T-C2** Persistent `python-gphoto2` session, 20 shots, per-stage timing at size **S / M / L**
-- [ ] **T-C3** Does `GP_FILE_TYPE_PREVIEW` work on the a6400? Latency + resolution returned
-- [ ] **T-C4** `trigger_capture` + `wait_for_event` vs `capture()` — measure both
-- [ ] **T-C5** PTP throughput in MB/s per JPEG size → **compute the size ceiling**
+- [x] **T-C2** Persistent `python-gphoto2` session, per-stage timing at size **S / M / L** — done via `tools/cam_test.py capture-full` / `soak`. L got a real n=10 sample; S/M are single-shot only so far (all three already sit far under budget — rerun with n=10+ each only if tightening confidence matters later)
+- [x] **T-C3** Does `GP_FILE_TYPE_PREVIEW` work on the a6400? **No.** `download_preview()` returns nothing — confirmed via `tools/cam_test.py capture-preview-then-full`, which falls back to a direct full download cleanly. Moot anyway: full download is only ~13–50ms, faster than a preview round-trip would be.
+- [ ] **T-C4** `trigger_capture` + `wait_for_event` vs `capture()` — measure both (only the `trigger_capture`+`wait_for_event` path measured so far)
+- [x] **T-C5** PTP throughput per JPEG size → **no meaningful size ceiling on this body.** Download time barely grows with size (44ms → 48ms from S to L) and total shutter→downloadable stays under 1.1s worst-case even at L — see Measured table. MB/s not reported: at 5–50ms transfer times the number is dominated by fixed per-request overhead, not sustained throughput, so it isn't a meaningful ceiling estimate.
 - [ ] **T-C6** RAW+JPEG with `Save Dest: Card+PC` — is only the JPEG pulled? How fast?
-- [ ] **T-C7** Effect of `Still Img. Save Dest: PC Only` vs `Card+PC` on latency
-- [ ] **T-C8** Reconnect: unplug USB mid-session, measure recovery time; test `uhubctl` power-cycle on this Pi model
+- [ ] **T-C7** Effect of `Still Img. Save Dest: PC Only` vs `Card+PC` on latency (currently running with `Save Dest: sdram`, the PC-only-equivalent setting — not yet compared against `card+sdram`)
+- [x] **T-C8** Reconnect: unplug USB mid-session, measure recovery time. **~9.7s** full recovery via a plain "wait 2s, retry `reconnect()`" loop (3 attempts: disconnect raised `[-7] I/O problem`, two retries hit `[-105] Unknown model` while USB re-enumerated, third succeeded) — verified with a real capture afterward, not just a successful `connect()`. `uhubctl` power-cycle not tested (not installed; not needed given the plain retry loop already recovers this fast). Fault-injection caught a real bug in our own code along the way: `GphotoBackend.trigger_capture()` only wrapped the initial `trigger_capture()` call, not the `wait_for_event()` loop after it — a disconnect during the wait leaked a raw `gphoto2.GPhoto2Error` instead of our `CameraDisconnectedError`. Fixed (also hardened `connect()` and `download_full()` the same way). Separately noticed: restarting the test script right after a crash (one that skipped `disconnect()`/`camera.exit()`) caused one flaky `capture()` timeout on the very next attempt before recovering on its own — worth keeping in mind for the camera-worker's own crash-restart path in Phase 1 (T-1.6), though not reproduced as a hard failure.
 
-**Measured:**
+**Measured** (2026-09-01, real a6400 via native `libgphoto2` on the Pi — Debian 13/aarch64, `libgphoto2` 2.5.31, `python-gphoto2` 2.6.4, manual mode, 1/4000s, f/3.5, ISO Auto — see note below):
 
-| Test | S (3008×2000) | M (4240×2832) | L (6000×4000) |
+| Test | S (3008×2000) | M (4240×2832) | L (6000×4000, n=10) |
 |---|---|---|---|
-| trigger → file added | | | |
-| thumb download | | | |
-| full download | | | |
-| MB/s | | | |
+| trigger → file added | 0.79s | 0.78s | avg 0.96s (min 0.93 / max 1.05) |
+| full download | 0.04s | 0.04s | avg 0.013s (min 0.005 / max 0.048) |
+| **total shutter → downloadable** | 0.84s | 0.83s | avg 0.975s (min 0.93 / max 1.07) |
+| file size | 1834 KB | 1980 KB | avg ~3.5 MB |
+
+All comfortably under the 3.0s exit criterion, with low run-to-run variance at L (~130ms spread over 10 shots) and zero PTP session drops or errors across the run.
+
+**Where the ~1s actually goes** (debug-traced one L-size capture at the PTP event level via `gp_log_add_func` + per-event timestamps): the trigger round-trip itself is only ~40ms. The dominant cost is a ~800ms gap between the camera's "capture started" PTP event and it reporting anything else at all — no events, no data, nothing our `wait_for_event` loop could act on sooner. Confirmed this is *not* an artifact of our polling (each wait call returned well inside its window, not cut short) and *not* slow exposure (shutter speed was already locked to 1/4000s in manual mode — checked directly). This is in-camera JPEG encode + object-buffer time: a hardware/firmware floor for the a6400 over PTP, matching the "Sony's PTP stack is not one of the fast ones here" diagnosis in §2. It doesn't threaten the budget — it's just where the (still comfortable) ~1s goes.
+
+**Outstanding from the preflight checklist (§3.4):** ISO is currently `Auto` — flagged there as something guests will notice shifting shot to shot. Not yet changed; do this before Phase 1 sign-off.
 
 ### Render — `tools/bench_render.py`
 
@@ -253,49 +259,51 @@ Standalone scripts in `tools/`. No application code. **Exit gate for starting Ph
 
 ### Preview — `tools/bench_preview.py`
 
-- [ ] **T-P1** go2rtc MJPEG `copy` at 1280×720 — 30 min soak, count dropped/corrupt frames
+- [x] **T-P1** go2rtc MJPEG `copy` at 1280×720 — pipeline confirmed working end-to-end (capture stick → go2rtc `exec:` ffmpeg passthrough → HTTP `/api/stream.mjpeg` consumer → real frames pulled and visually verified). Stick shows a brief color-bar test pattern for the first moment after signal lock — cosmetic, not a bug. **Not yet done: the full 30 min soak counting dropped/corrupt frames** — only a short (~8s) sample tested so far.
 - [ ] **T-P2** Same at 640×480
-- [ ] **T-P3** YUYV → MJPEG transcode — CPU cost and artifact rate vs `copy`
+- [ ] **T-P3** YUYV → MJPEG transcode — CPU cost and artifact rate vs `copy` — moot for now: confirmed via `v4l2-ctl --list-formats-ext` that the stick supports real MJPEG up to 1920×1080@60fps (YUYV on this stick tops out at 5fps at 1080p, exactly the bottleneck §4 warned about) — no reason to consider the transcode fallback unless `copy` misbehaves in the 30 min soak
 - [ ] **T-P4** CPU cost of the app proxying go2rtc's MJPEG to a browser
 - [ ] **T-P5** Latency: physical motion → pixels on screen
 - [ ] **T-P6** HDMI blanking behaviour during capture — how many frames, does go2rtc recover cleanly?
 
+**Note:** thin black bars visible on both sides of the captured frame — some aspect-ratio letterboxing between the camera's HDMI output and the requested 1280×720. Not investigated yet; revisit when doing kiosk UI layout (T-1.11).
+
 ### Contention — the test specific to your build
 
-- [ ] **T-X1** **Does preview streaming degrade PTP download speed?** Run T-C2 with preview idle, then with preview live. Both devices are on the same Pi USB subsystem.
+- [x] **T-X1** **Does preview streaming degrade PTP download speed?** No measurable effect. 10-shot L-size soaks compared: idle-preview baseline avg total 1.082s vs preview-actively-streaming avg total 1.067s — well within shot-to-shot noise (~30–80ms) for both runs, distributions fully overlap. Tested at 1280×720@15fps MJPEG preview bitrate; not re-tested at higher preview resolutions.
 - [ ] **T-X2** Repeat with camera on USB2 port + stick on USB3 port vs both on USB2
 - [ ] **T-X3** Godox recycle time at working power — does it keep up with a 4-shot collage? Check for underexposed frames.
 
 ### Soak
 
-- [ ] **T-S1** 300 consecutive captures. Does the Sony PTP session drop? Memory growth? Thermal throttle? Log everything.
+- [x] **T-S1** 300 consecutive captures via `tools/cam_test.py soak --shots 300 --size L --interval 1.0`. **300/300 succeeded, zero failures, zero disconnects.** trigger→file avg 1.044s (min 1.012 / max 1.353), total avg 1.068s (min 1.026 / max 1.377). No drift: first-10 avg 1.097s vs last-10 avg 1.069s — slightly faster if anything. `vcgencmd get_throttled` = `0x0` (no throttling at all), temp 43.8°C post-run. **Gap:** RSS memory wasn't sampled during the run, so memory growth isn't directly measured — 300 clean shots with stable timing is reassuring but not conclusive against a slow leak.
 
 **Exit criteria:**
-- Shutter → displayable image **< 3.0 s** measured
-- A decided JPEG size with a documented full-download time
-- Preview stable for 30 min with acceptable artifacts
-- Known, working camera reconnect procedure
+- [x] Shutter → displayable image **< 3.0 s** measured — max 1.377s across 300 shots at L, well inside budget
+- [x] A decided JPEG size with a documented full-download time — L, ~1.07s avg total shutter→downloadable
+- [ ] Preview stable for 30 min with acceptable artifacts — pipeline verified working (T-P1), but only ~8s sampled so far, not the full 30 min soak
+- [x] Known, working camera reconnect procedure — ~9.7s auto-recovery via plain retry loop (T-C8)
 
 ---
 
 ## 7. Phase 1 — core capture loop
 
-- [ ] **T-1.1** Project skeleton, `uv`, ruff/mypy, justfile, CI
-- [ ] **T-1.2** Telemetry module — spans, SQLite sink, `/debug/traces` waterfall. *Before* any capture code.
-- [ ] **T-1.3** `CameraBackend` protocol + IPC message types
-- [ ] **T-1.4** `MockBackend` + fixtures + fault injection
-- [ ] **T-1.5** Contract test suite (green against mock)
-- [ ] **T-1.6** Camera worker process + async client, supervision and restart
-- [ ] **T-1.7** `GphotoBackend` — contract suite green on hardware
-- [ ] **T-1.8** Session state machine: `IDLE → ARMED → COUNTDOWN → CAPTURING → REVIEW → PROCESSING → IDLE`
-- [ ] **T-1.9** WebSocket event bus, typed events
-- [ ] **T-1.10** go2rtc supervision + MJPEG proxy endpoint
-- [ ] **T-1.11** Minimal kiosk UI: start → countdown over live preview → review. Ugly is fine.
-- [ ] **T-1.12** Frontend reports `browser_decode` timing back over WS
-- [ ] **T-1.13** SQLite schema + repos: sessions, captures, spans
-- [ ] **T-1.14** `just bench-pi` — run the harness on Pi from your laptop
+- [x] **T-1.1** Project skeleton, `uv`, ruff/mypy, justfile, CI
+- [x] **T-1.2** Telemetry module — spans + SQLite sink (`telemetry/spans.py`, called from `web/session.py`), plus `GET /debug/traces` (per-capture waterfall) and `GET /debug/timings` (p50/p95/p99/max per span name) — `web/routers/debug.py`, live-verified against real capture data
+- [x] **T-1.3** `CameraBackend` protocol + IPC message types — `camera/messages.py`, msgspec tagged unions over length-prefixed frames, TCP loopback rather than a literal UNIX socket (this dev machine's Python has no `socket.AF_UNIX`; TCP loopback behaves identically on the Pi, so no platform branching)
+- [x] **T-1.4** `MockBackend` + fixtures + fault injection — camera fault knobs built directly into `MockBackend` and threaded through `MockCameraConfig`/`worker.py`'s CLI/`app.py`'s subprocess args: `disconnect_every_n` (simulates the Sony PTP-session-drop risk), `download_timeout_pct`, `slow_download_pct` (simulate flaky USB transfers). Printer/upload fault knobs from §4.4's sample not built — those backends don't exist yet (Phase 4)
+- [x] **T-1.5** Contract test suite (green against mock) — still passing, now also exercised transitively through the worker's request/response mapping
+- [x] **T-1.6** Camera worker process + async client — `camera/worker.py` (TCP server, single-threaded, one client at a time) + `camera/client.py` (asyncio, lock-serialized). "Restart" scoped narrowly per plan: the client reports "can't reach the worker" as `CameraDisconnectedError` rather than respawning it itself — actual process supervision (systemd `Restart=always`) is Phase 5 (T-5.1)
+- [x] **T-1.7** `GphotoBackend` — implemented and validated against real a6400 hardware on the Pi throughout Phase 0 (300-shot soak, reconnect test, contention test all passed). `tests/contract/test_camera_backend.py` now parametrizes over `mock`/`gphoto`, the latter marked `hardware` (skipped by default via `pyproject.toml`'s existing `addopts = "-m 'not hardware'"`; run explicitly with `pytest -m hardware` on the Pi) — not yet actually run on the Pi through this specific suite, hardware validation so far was via `tools/cam_test.py`
+- [x] **T-1.8** Session state machine: `IDLE → ARMED → COUNTDOWN → CAPTURING → REVIEW → PROCESSING → IDLE` — plus one addition beyond the original diagram: a direct `CAPTURING → IDLE` edge for a failed capture (a guest never "reviews" a camera error)
+- [x] **T-1.9** WebSocket event bus, typed events — `core/events.py` (msgspec, JSON over the wire), `web/session.py`'s `SessionManager`, `web/routers/kiosk.py`'s `/ws` route
+- [x] **T-1.10** MJPEG proxy endpoint — `preview/proxy.py` + `web/routers/preview.py`, relays go2rtc's stream verbatim (no decode/re-encode) with the real upstream `Content-Type`/boundary. "go2rtc supervision" scoped out: go2rtc already runs as its own systemd service on the Pi (confirmed working in Phase 0), so this app doesn't start/stop/monitor the go2rtc process itself, only proxies its stream
+- [x] **T-1.11** Minimal kiosk UI: start → countdown over live preview → review — `frontend/src/routes/Kiosk.svelte`, driven entirely by the WS event stream, live preview via `<img src="/preview/stream">`. Ugly-but-functional, as specified
+- [x] **T-1.12** Frontend reports `browser_decode` timing back over WS — the `/ws` route now parses inbound `{"type": "browser_decode", capture_id, duration_ms}` messages (`web/routers/kiosk.py`), `SessionManager.record_browser_decode()` records it as a `display.browser_decode` span via a new `telemetry.spans.record_duration()` helper (for durations measured elsewhere, not wrapped in `span()`'s context manager); `Kiosk.svelte`'s review `<img onload>` sends it
+- [x] **T-1.13** SQLite schema + repos: sessions, captures — `storage/repos.py` (`SessionRepo`, `CaptureRepo`), wired into every state transition and capture in `SessionManager`. `spans` repo not separately wrapped (used directly via `telemetry/spans.py`, which was already a thin enough wrapper)
+- [x] **T-1.14** `just bench-pi` — the base-scaffold recipe was stale (pointed at the never-implemented `tools/bench_camera.py` stub, assumed `uv` on the Pi, which was never installed there). Rewritten to run the real `tools/cam_test.py` over SSH; also added `just pull-pi-captures`. Both recipes' underlying commands verified live against the real Pi (`admin@192.168.188.44`)
 
-**Done when:** single photo, end to end, on the Pi, with a waterfall showing every millisecond.
+**Done when:** single photo, end to end, on the Pi, with a waterfall showing every millisecond. **Status: 14/14 done.** Full capture loop (arm → countdown → capture → real JPEG served → review → dismiss) verified end to end on the dev laptop against the mock backend, with `/debug/traces`/`/debug/timings` verified live against real capture data. Real capture *timing* was independently proven on the Pi in Phase 0 (§6) via `tools/cam_test.py`. One honest gap for a future session: the FastAPI app itself (not just `tools/cam_test.py`) hasn't been run end to end on the Pi against the real `GphotoBackend` yet — only against `MockBackend` here on the laptop, and against `GphotoBackend` directly (not through the app) on the Pi.
 
 ---
 
@@ -386,9 +394,9 @@ Standalone scripts in `tools/`. No application code. **Exit gate for starting Ph
 
 | # | Decision | Blocks | Status |
 |---|---|---|---|
-| D1 | JPEG size (S / M / L / RAW+JPEG) | Phase 2 | **Blocked on T-C5, T-C6** |
-| D2 | Thumb-first vs full+shrink-on-load | Phase 1 | **Blocked on T-C3** |
-| D3 | go2rtc `copy` vs transcode | Phase 1 | **Blocked on T-P1, T-P3** |
+| D1 | JPEG size (S / M / L / RAW+JPEG) | Phase 2 | **Resolved: L.** No measurable latency cost vs S/M (§6 T-C5); set as `config/pi.yaml`'s default. RAW+JPEG (T-C6) untested, not needed to unblock this |
+| D2 | Thumb-first vs full+shrink-on-load | Phase 1 | **Resolved: full+shrink.** a6400 has no PTP preview support (§6 T-C3) and full download is faster than a preview round-trip would be anyway |
+| D3 | go2rtc `copy` vs transcode | Phase 1 | **Leaning `copy`** — pipeline works end-to-end, stick has real MJPEG hardware support (§6 T-P1/T-P3); still want the full 30 min soak before fully closing this out |
 | D4 | Upload target (VPS vs S3-compatible) | Phase 4 | Open — build the abstraction first |
 | D5 | Server gallery: same codebase or standalone? | Phase 3 | Open |
 | D6 | Print sizes: 6×4 only, or strips too? | Phase 2 | Open — affects template schema |

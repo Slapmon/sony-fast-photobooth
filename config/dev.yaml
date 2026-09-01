@@ -6,11 +6,18 @@ profile: dev
 
 camera:
   backend: mock
+  worker_port: 8765
   mock:
     fixtures_dir: fixtures/shots
     trigger_delay_ms: 250
     thumb_latency_ms: 150
     full_download_mbps: 40.0
+    # Fault injection (IMPLEMENTATION_PLAN.md §4.4) — off by default. Set
+    # disconnect_every_n to simulate the Sony PTP-session-drop risk, or the
+    # *_pct knobs to simulate flaky USB transfers, for local testing.
+    disconnect_every_n: null
+    download_timeout_pct: 0.0
+    slow_download_pct: 0.0
 
 preview:
   # Point go2rtc at a laptop webcam, or loop a video file:

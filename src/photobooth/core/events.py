@@ -2,29 +2,42 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import msgspec
 
 from photobooth.core.state import SessionState
 
 
-@dataclass(frozen=True, slots=True)
-class StateChanged:
+class StateChanged(msgspec.Struct, tag=True):
     session_id: str
     state: SessionState
 
 
-@dataclass(frozen=True, slots=True)
-class PreviewReady:
+class CountdownStarted(msgspec.Struct, tag=True):
+    session_id: str
+    duration_s: float
+
+
+class PreviewReady(msgspec.Struct, tag=True):
     session_id: str
     capture_id: str
     image_url: str
 
 
-@dataclass(frozen=True, slots=True)
-class FullImageReady:
+class FullImageReady(msgspec.Struct, tag=True):
     session_id: str
     capture_id: str
     image_url: str
 
 
-Event = StateChanged | PreviewReady | FullImageReady
+class CaptureFailed(msgspec.Struct, tag=True):
+    session_id: str
+    message: str
+
+
+Event = StateChanged | CountdownStarted | PreviewReady | FullImageReady | CaptureFailed
+
+_encoder = msgspec.json.Encoder()
+
+
+def encode_event(event: Event) -> bytes:
+    return _encoder.encode(event)

@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "broken-image",
+        "value": "/preview/stream",
+        "files": [
+          "frontend/src/routes/Kiosk.svelte"
+        ],
+        "createdAt": "2026-09-01T10:24:31.321Z",
+        "reason": "live MJPEG proxy endpoint built and tested this session (web/routers/preview.py), not a placeholder — static scan can't verify a streaming route serves real content"
+      }
+    ]
+  }
+}

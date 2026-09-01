@@ -33,11 +33,17 @@ typecheck:
 # Run everything CI runs, locally.
 check: lint typecheck test
 
-# Run the Phase 0 benchmark harness over SSH on the Pi and pull results back.
-# Usage: just bench-pi user@pi-host
-bench-pi host:
-    ssh {{host}} 'cd photobooth && uv run python tools/bench_camera.py'
-    scp {{host}}:photobooth/bench_results.db ./bench_results.pi.db
+# Run tools/cam_test.py on the Pi over SSH (real camera, real gphoto2 —
+# see IMPLEMENTATION_PLAN.md §6). The Pi runs a plain venv, not uv (uv was
+# never installed there; a Phase 0 finding, not a design choice).
+# Usage: just bench-pi admin@pi-host "soak --shots 10 --size L"
+bench-pi host *args:
+    ssh {{host}} 'cd photobooth && source .venv/bin/activate && python tools/cam_test.py {{args}}'
+
+# Pull captured test JPEGs back from the Pi to out/cam_test/ for a look.
+# Usage: just pull-pi-captures admin@pi-host
+pull-pi-captures host:
+    scp '{{host}}:photobooth/out/cam_test/*.jpg' out/cam_test/
 
 # Frontend dev server (Svelte + Vite).
 frontend-dev:

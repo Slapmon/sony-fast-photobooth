@@ -37,7 +37,12 @@ CREATE TABLE IF NOT EXISTS spans (
 
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    # check_same_thread=False: the app's async event loop can hop OS threads
+    # (e.g. FastAPI's threadpool for sync dependencies, anyio portals in
+    # tests) while callers still serialize access to this one connection —
+    # sqlite3's default same-thread check would otherwise reject that even
+    # though nothing here actually uses the connection concurrently.
+    conn = sqlite3.connect(path, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
     return conn

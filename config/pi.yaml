@@ -7,8 +7,12 @@ profile: pi
 
 camera:
   backend: gphoto
+  worker_port: 8765
   gphoto:
-    jpeg_size: S   # revisit once Phase 0 T-C5/T-C6 pick the real ceiling
+    # L: Phase 0 (IMPLEMENTATION_PLAN.md §6 T-C5) found no measurable latency
+    # cost vs S/M on the a6400 (44-48ms download regardless of size) — L
+    # gives the best print/archive quality for free.
+    jpeg_size: L
 
 preview:
   stream_url: "http://127.0.0.1:1984/api/stream.mjpeg?src=photobooth"

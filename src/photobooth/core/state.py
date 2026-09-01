@@ -23,7 +23,9 @@ ALLOWED_TRANSITIONS: dict[SessionState, frozenset[SessionState]] = {
     SessionState.IDLE: frozenset({SessionState.ARMED}),
     SessionState.ARMED: frozenset({SessionState.COUNTDOWN, SessionState.IDLE}),
     SessionState.COUNTDOWN: frozenset({SessionState.CAPTURING, SessionState.IDLE}),
-    SessionState.CAPTURING: frozenset({SessionState.REVIEW}),
+    # IDLE covers a failed capture (camera error mid-flow) — REVIEW is the
+    # success path only, a guest never "reviews" a failure.
+    SessionState.CAPTURING: frozenset({SessionState.REVIEW, SessionState.IDLE}),
     SessionState.REVIEW: frozenset({SessionState.PROCESSING, SessionState.IDLE}),
     SessionState.PROCESSING: frozenset({SessionState.IDLE}),
 }

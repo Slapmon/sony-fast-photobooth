@@ -19,6 +19,10 @@ class MockCameraConfig(BaseModel):
     trigger_delay_ms: int = 250
     thumb_latency_ms: int = 150
     full_download_mbps: float = 40.0
+    # Fault injection (IMPLEMENTATION_PLAN.md §4.4) — all off by default.
+    disconnect_every_n: int | None = None
+    download_timeout_pct: float = 0.0
+    slow_download_pct: float = 0.0
 
 
 class GphotoCameraConfig(BaseModel):
@@ -27,12 +31,14 @@ class GphotoCameraConfig(BaseModel):
 
 class CameraConfig(BaseModel):
     backend: Literal["mock", "gphoto"] = "mock"
+    worker_port: int = 8765
     mock: MockCameraConfig = MockCameraConfig()
     gphoto: GphotoCameraConfig = GphotoCameraConfig()
 
 
 class PreviewConfig(BaseModel):
     stream_url: str
+    connect_timeout_s: float = 5.0
 
 
 class NullPrinterConfig(BaseModel):
