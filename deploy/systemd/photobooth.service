@@ -1,0 +1,89 @@
+[Unit]
+# Main app unit (IMPLEMENTATION_PLAN.md T-5.1). go2rtc is NOT started or
+# managed by this unit — it already runs as its own systemd service on the
+# Pi (confirmed working in Phase 0, IMPLEMENTATION_PLAN.md T-1.10's note),
+# so photobooth.service only needs to come up *after* it so the preview
+# stream is reachable at boot. Adjust the unit name below if go2rtc's real
+# service is named differently on your Pi (`systemctl list-units | grep go2rtc`).
+Description=Photobooth kiosk app (FastAPI/uvicorn)
+After=network-online.target go2rtc.service
+Wants=network-online.target
+# Soft dependency, not a hard `Requires=`: if go2rtc is momentarily down,
+# the app should still start and let /debug/health report the preview
+# stream as red rather than refusing to boot at all.
+
+[Service]
+Type=simple
+# Dedicated non-root service user/group — create it once with:
+#   sudo useradd --system --home /opt/photobooth --shell /usr/sbin/nologin photobooth
+#   sudo usermod -aG video,dialout,plugdev photobooth   # camera/USB access
+# `video`/`plugdev` (and `dialout` on some distros) are what let a non-root
+# user open the gphoto2 USB device and v4l2 nodes without a udev rule
+# granting world access — check `ls -l /dev/bus/usb/*/*` and
+# `ls -l /dev/video*` on your Pi and adjust group membership to match.
+User=photobooth
+Group=photobooth
+
+# Repo checkout location on the Pi. Adjust to wherever `git clone` /
+# deployment actually put it.
+WorkingDirectory=/opt/photobooth
+
+# Pi profile config, no --reload (that's a `just dev`-only convenience —
+# uvicorn's reloader forks a watcher process that has no business running
+# under a production supervisor; Restart=always below is systemd's own
+# equivalent for "come back after something goes wrong").
+Environment=PHOTOBOOTH_CONFIG=config/pi.yaml
+# uvicorn binds host/port from config/pi.yaml's `web:` section (0.0.0.0:8000)
+# via Settings — nothing here needs to override that.
+ExecStart=/opt/photobooth/.venv/bin/python -m uvicorn photobooth.web.app:app --host 0.0.0.0 --port 8000
+
+# Crash recovery: come back after a crash, but not so fast that a
+# crash-loop hammers the USB/camera stack (each restart re-spawns the
+# camera-worker subprocess, which re-opens the PTP session — see
+# web/app.py's lifespan). 5s gives the camera/USB hardware a moment to
+# settle between attempts.
+Restart=always
+RestartSec=5
+
+# Graceful shutdown: web/app.py's lifespan handler catches SIGTERM via
+# uvicorn's normal shutdown path, awaits camera_client.close(), then does
+# worker_process.terminate() / .wait(timeout=5) / .kill() on the camera
+# worker subprocess (see web/app.py). Give the whole tree enough time for
+# that 5s worker-wait plus its own cleanup before systemd SIGKILLs it.
+TimeoutStopSec=15
+KillMode=mixed
+
+# --- Watchdog: NOT wired up in this unit. ---
+# `Type=notify` + `WatchdogSec=` would let systemd kill and restart the
+# process if it stops responding (not just if it crashes) — but that
+# requires the app to actually call sd_notify(WATCHDOG=1) periodically
+# from a live, non-blocked point in its own event loop (e.g. a background
+# asyncio task calling into `systemd.daemon.notify()` from the
+# `python-systemd` package, or a raw AF_UNIX write to $NOTIFY_SOCKET).
+# That's a real code change to web/app.py's lifespan/startup, out of scope
+# for this unit-file task — see IMPLEMENTATION_PLAN.md T-5.1's report.
+# Until that lands: Restart=always above still recovers from a hard crash
+# (non-zero exit, killed process), it just can't detect a hang where the
+# process is alive but wedged. Follow-up: add a periodic watchdog ping and
+# switch this to:
+#   Type=notify
+#   WatchdogSec=30
+Type=simple
+
+# journald captures stdout/stderr automatically (no file logging needed —
+# see src/photobooth/telemetry/logging_config.py and this deploy/README.md
+# for the log-rotation decision). Explicit here for clarity even though
+# it's systemd's default for Type=simple units.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=photobooth
+
+# Hardening (safe defaults for a single-purpose kiosk service; loosen if
+# something legitimate breaks — e.g. NoNewPrivileges can interact badly
+# with some CUPS/printer setups, test before an event).
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

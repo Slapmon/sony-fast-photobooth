@@ -1,0 +1,11 @@
+id: multi-mode-event
+title: "Test Multi Mode Event"
+date: "2026-09-01"
+template: "single-slot.yaml"
+modes:
+  - id: single
+    label: "Single Photo"
+    template: "single-slot.yaml"
+  - id: collage
+    label: "Collage"
+    template: "two-slot.yaml"

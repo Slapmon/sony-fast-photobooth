@@ -11,6 +11,7 @@ CameraWorkerClient the rest of the app uses.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 import subprocess
@@ -27,14 +28,25 @@ from fastapi.staticfiles import StaticFiles
 from photobooth.camera.client import CameraWorkerClient
 from photobooth.camera.protocol import CameraDisconnectedError, CameraError
 from photobooth.config.models import Settings
+from photobooth.delivery.backend import build_delivery_backend
+from photobooth.delivery.worker import DeliveryWorker
 from photobooth.preview.proxy import PreviewProxy
+from photobooth.printing.backend import build_printer_backend
+from photobooth.printing.queue import PrintQueue, make_print_handler
 from photobooth.storage import db as storage_db
-from photobooth.web.routers import debug, kiosk, preview
+from photobooth.storage.queue import JobQueue, run_worker
+from photobooth.storage.retention import run_retention_sweep
+from photobooth.telemetry.logging_config import configure_logging
+from photobooth.web.routers import admin, admin_auth, debug, gallery, kiosk, preview, share
 from photobooth.web.session import SessionManager
 
 logger = structlog.get_logger(__name__)
 
 CAPTURES_DIR = Path("out/captures")
+# Layout YAMLs (T-2.1) — same "templates/" repo-root convention as
+# events.base_dir, resolved here rather than added to Settings since it's
+# fixed by repo layout, not something dev/pi profiles vary (IMPLEMENTATION_PLAN.md §8).
+TEMPLATES_DIR = Path("templates")
 _WORKER_READY_TIMEOUT_S = 5.0
 _WORKER_READY_POLL_S = 0.1
 
@@ -91,6 +103,11 @@ def _wait_for_worker(host: str, port: int, timeout_s: float) -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     config_path = Path(os.environ.get("PHOTOBOOTH_CONFIG", "config/dev.yaml"))
     settings = Settings.load(config_path)
+    # Must run before anything else logs (T-5.2).
+    configure_logging(settings.logging)
+    # Read by admin_auth's require_admin dependency (T-3.7) to check PINs
+    # and sign/verify session tokens.
+    app.state.settings = settings
 
     # Blocking Popen is intentional here: this runs once at startup, before
     # the event loop is serving any requests, and _wait_for_worker right
@@ -107,19 +124,79 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     conn = storage_db.connect(settings.storage.sqlite_path)
 
-    session_manager = SessionManager(camera=camera_client, db=conn, captures_dir=CAPTURES_DIR)
-    preview_proxy = PreviewProxy(
-        settings.preview.stream_url, settings.preview.connect_timeout_s
+    # Delivery (T-4.2/T-4.4): uploads are enqueued, never called inline, so a
+    # target being unreachable degrades to retry-with-backoff rather than a
+    # lost photo. See delivery/worker.py's module docstring for the full
+    # contract this wiring follows.
+    job_queue = JobQueue(conn)
+    delivery_backend = build_delivery_backend(settings.delivery)
+    delivery_worker = DeliveryWorker(job_queue, delivery_backend)
+    delivery_worker.start()
+    if settings.delivery.backend == "local":
+        settings.delivery.local.output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Printing (T-4.6/T-4.7): backend=None means printing is disabled for
+    # this profile — no worker task is started, and admin/kiosk routes must
+    # treat a None printer_backend as "not configured" rather than erroring.
+    printer_backend = build_printer_backend(settings.printing)
+    print_queue = PrintQueue(job_queue, settings.printing.cups.print_limit_per_session)
+    print_stop_event = asyncio.Event()
+    print_task: asyncio.Task[None] | None = None
+    if printer_backend is not None:
+        print_task = asyncio.create_task(
+            run_worker(
+                job_queue,
+                kind="print",
+                handler=make_print_handler(printer_backend),
+                stop_event=print_stop_event,
+            )
+        )
+
+    # Retention (T-4.5): always started — a no-op loop when
+    # settings.retention.enabled is False, per run_retention_sweep's own
+    # contract, so there's no separate enabled-branch needed here.
+    retention_stop_event = asyncio.Event()
+    retention_task = asyncio.create_task(
+        run_retention_sweep(conn, CAPTURES_DIR, settings.retention, stop_event=retention_stop_event)
     )
+
+    session_manager = SessionManager(
+        camera=camera_client,
+        db=conn,
+        captures_dir=CAPTURES_DIR,
+        events_dir=settings.events.base_dir,
+        templates_dir=TEMPLATES_DIR,
+        active_event_id=settings.events.active_event_id,
+        job_queue=job_queue,
+    )
+    preview_proxy = PreviewProxy(settings.preview.stream_url, settings.preview.connect_timeout_s)
     app.state.session_manager = session_manager
     app.state.preview_proxy = preview_proxy
     app.state.worker_process = worker_process
     app.state.camera_client = camera_client
     app.state.db = conn
+    # Read by the kiosk router's /session/event endpoint (T-3.1) to serve
+    # the active event's public info to the attract loop — kept as plain
+    # app.state attributes (like everything else above) rather than
+    # stashing the whole Settings object, so it stays a two-line addition.
+    app.state.events_dir = settings.events.base_dir
+    app.state.active_event_id = settings.events.active_event_id
+    app.state.kiosk_idle_timeout_s = settings.kiosk.idle_timeout_s
+    # Read by admin/kiosk routers for delivery/print status, submitting
+    # print jobs, and the printer-status gate on the guest print button.
+    app.state.job_queue = job_queue
+    app.state.printer_backend = printer_backend
+    app.state.print_queue = print_queue
 
     try:
         yield
     finally:
+        print_stop_event.set()
+        if print_task is not None:
+            await print_task
+        retention_stop_event.set()
+        await retention_task
+        await delivery_worker.aclose()
         await preview_proxy.aclose()
         await camera_client.close()
         worker_process.terminate()
@@ -136,7 +213,20 @@ app = FastAPI(title="photobooth", lifespan=lifespan)
 app.include_router(kiosk.router)
 app.include_router(preview.router)
 app.include_router(debug.router)
+app.include_router(gallery.router)
+app.include_router(admin_auth.router)
+app.include_router(admin.router)
+app.include_router(share.router)
 app.mount("/captures", StaticFiles(directory=CAPTURES_DIR), name="captures")
+# Mirrors CAPTURES_DIR's mount above — LocalDirBackend.upload() (T-4.2)
+# returns URLs of the form /uploads/{remote_key}; only meaningful when
+# delivery.backend == "local", but mounting unconditionally at a fixed
+# repo-relative default keeps this a static, testable path (matching
+# TEMPLATES_DIR's reasoning above) rather than something profile-dependent
+# resolved at import time, before Settings has even loaded.
+UPLOADS_DIR = Path("out/uploads")
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
 
 @app.get("/health")

@@ -1,8 +1,163 @@
+/* Photobooth design tokens — one palette shared by the kiosk, gallery, and
+   admin surfaces. Pinned to a single light theme (`color-scheme: light`)
+   rather than `light dark`: the previous `light dark` setting let browsers
+   in dark mode swap in a white default text color while components with an
+   explicit *light* background (e.g. admin's yellow note boxes) kept their
+   background fixed — white-on-yellow. Every color below is an explicit
+   foreground/background pair, so nothing is left to a browser default.
+*/
 :root {
-  color-scheme: light dark;
-  font-family: system-ui, sans-serif;
+  color-scheme: light;
+
+  /* Warm neutrals — paper background, ink text. Event-appropriate (not a
+     stark white/black SaaS look), but plain enough to stay legible on a
+     kiosk touchscreen in variable venue lighting. */
+  --color-bg: #faf7f2;
+  --color-surface: #ffffff;
+  --color-surface-alt: #f3ede2;
+  --color-border: #e3dbcb;
+  --color-ink: #2a2420;
+  --color-ink-muted: #6f6558;
+
+  /* Brand accent — terracotta. Used for primary actions and the one accent
+     color guests see (active tab, primary button, focus ring). */
+  --color-primary: #b1462f;
+  --color-primary-hover: #96381f;
+  --color-primary-contrast: #ffffff;
+
+  /* Semantic status pairs — background+foreground always defined together
+     so contrast is guaranteed regardless of theme. Used by StatusRow's
+     dot color and by inline note/error/success text. */
+  --color-success-bg: #e4f3ea;
+  --color-success-fg: #1f6b45;
+  --color-success-dot: #2f9e5f;
+
+  --color-danger-bg: #fbe9e7;
+  --color-danger-fg: #96271d;
+  --color-danger-dot: #c1382b;
+
+  --color-warning-bg: #fbeed2;
+  --color-warning-fg: #7a4b06;
+  --color-warning-dot: #c98a1a;
+
+  --color-neutral-bg: #eeebe5;
+  --color-neutral-fg: #57514a;
+  --color-neutral-dot: #9a9186;
+
+  /* Full-screen guest-facing overlays (attract loop, countdown, mode
+     select) sit on top of the live camera preview, not the paper
+     background above — always dark-on-image for legibility regardless of
+     what's behind them. */
+  --color-overlay-bg: rgba(20, 16, 12, 0.55);
+  --color-overlay-ink: #ffffff;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow-sm: 0 1px 2px rgba(42, 36, 32, 0.08), 0 1px 1px rgba(42, 36, 32, 0.05);
+  --shadow-md: 0 4px 16px rgba(42, 36, 32, 0.12);
+
+  --font-sans:
+    system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  /* Guest-facing display type only (attract-screen title) — a serif from
+     the system font stack, no network font fetch (venues may have no/weak
+     internet, per photobooth-plan.md's offline-robustness stance). */
+  --font-display: Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', serif;
+
+  font-family: var(--font-sans);
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+}
+
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Shared admin-panel building blocks — global (not component-scoped) so
+   every panel (Status/Preflight/Templates/Actions/Timings/Events) gets the
+   same button/card/note look without re-declaring it per component. */
+button.primary {
+  padding: 0.55rem 1.25rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+  font-size: 0.95rem;
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+button.primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+button.secondary {
+  padding: 0.5rem 1.1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-size: 0.95rem;
+}
+
+button.secondary:hover:not(:disabled) {
+  background: var(--color-surface-alt);
+}
+
+button.secondary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  padding: 1rem;
+}
+
+.note {
+  font-size: 0.9rem;
+  background: var(--color-warning-bg);
+  color: var(--color-warning-fg);
+  border: 1px solid var(--color-warning-fg);
+  padding: 0.75rem;
+  border-radius: var(--radius-sm);
+  margin: 0;
+}
+
+.error-text {
+  color: var(--color-danger-fg);
+  margin: 0;
+}
+
+.success-text {
+  color: var(--color-success-fg);
   margin: 0;
 }

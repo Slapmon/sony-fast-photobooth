@@ -41,3 +41,28 @@ storage:
 web:
   host: 127.0.0.1
   port: 8000
+
+events:
+  base_dir: events
+  # example-event is a real, loadable event checked into the repo (T-2.7) —
+  # gives the dev profile something to point at besides the "dev" placeholder.
+  active_event_id: example-event
+
+kiosk:
+  # Shorter than the 60s default for local testing (T-3.3), so the
+  # attract-loop return doesn't take a full minute to observe.
+  idle_timeout_s: 20.0
+
+admin:
+  # Real PIN for local dev only — never used on the pi profile (see pi.yaml,
+  # T-3.7). secret_key intentionally left unset: it's generated randomly at
+  # startup, so restarting `just dev` invalidates any open admin session,
+  # which is fine for local work.
+  pin: "0000"
+
+logging:
+  level: INFO
+  # Bump the camera package to DEBUG when chasing a capture/reconnect bug
+  # locally (mirrors the module_levels example in config/models.py's
+  # LoggingConfig docstring) — left empty by default.
+  module_levels: {}

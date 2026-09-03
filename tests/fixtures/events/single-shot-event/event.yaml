@@ -1,0 +1,4 @@
+id: single-shot-event
+title: "Test Single Shot Event"
+date: "2026-09-01"
+template: "single-slot.yaml"

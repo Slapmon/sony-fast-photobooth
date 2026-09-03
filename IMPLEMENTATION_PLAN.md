@@ -309,59 +309,59 @@ All comfortably under the 3.0s exit criterion, with low run-to-run variance at L
 
 ## 8. Phase 2 — pipeline & templates
 
-- [ ] **T-2.1** Template YAML schema + pydantic models + load-time validation
-- [ ] **T-2.2** pyvips compositor: slots, fit modes, overlay PNGs, text with custom fonts
-- [ ] **T-2.3** Variant rendering (print / web / thumb) with per-variant settings
-- [ ] **T-2.4** Golden-image tests with perceptual diff tolerance
-- [ ] **T-2.5** Collage modes driven by templates (2×2, 1+2, 3-strip)
-- [ ] **T-2.6** Countdown gating on `camera.idle` + overlap verification in collage mode
-- [ ] **T-2.7** `{event.*}` placeholder resolution
-- [ ] **T-2.8** Render worker pool, bounded concurrency (don't let 4 collages fight for 4 cores)
+- [x] **T-2.1** Template YAML schema + pydantic models + load-time validation — `pipeline/template.py` (`TemplateConfig`, `Canvas`, `Slot`, `Overlay` union, `VariantSpec`), validates slot bounds and overlay asset existence at load time, not just pydantic type-checking
+- [x] **T-2.2** pyvips compositor: slots, fit modes, overlay PNGs, text with custom fonts — `pipeline/compositor.py`; the shipped template's font asset is a placeholder (not a real font file) so text rendering falls back to a system font family with a logged warning — swap in a real script font before golden-image review
+- [x] **T-2.3** Variant rendering (print / web / thumb) with per-variant settings — `render_variant()` in `pipeline/compositor.py`
+- [x] **T-2.4** Golden-image tests with perceptual diff tolerance — `tests/golden/` (reference JPEGs + `test_golden_images.py`), Pillow `ImageChops.difference` mean-diff, tolerance 2.0/255 (same-machine re-renders are near pixel-identical; a real regression measured in the tens), with a deliberately-broken-render test proving the diff actually has teeth
+- [x] **T-2.5** Collage modes driven by templates (2×2, 1+2, 3-strip) — `templates/strip-1plus2.yaml`, `templates/strip-3strip.yaml` added alongside the existing 2×2, all validated + rendered across all three variants in `tests/unit/test_collage_templates.py`
+- [x] **T-2.6** Countdown gating on `camera.idle` + overlap verification in collage mode — `web/session.py`'s `SessionManager` now runs `shot_count` shots (derived from the active template's slot count) per session, gated by an `asyncio.Event` that blocks the next trigger until the previous shot's full download completes; proven by a test with an artificially slow download
+- [x] **T-2.7** `{event.*}` placeholder resolution — `config/event.py` (`EventConfig`, `load_event`, `resolve_placeholders`), unresolved placeholders raise rather than rendering literally
+- [x] **T-2.8** Render worker pool, bounded concurrency (don't let 4 collages fight for 4 cores) — `pipeline/pool.py`'s `RenderPool`, a `ThreadPoolExecutor` sized `min(4, cpu_count)` (pyvips releases the GIL, so threads not processes), async `render()` + `close()`/`aclose()`. Built and unit-tested in isolation; not yet wired into `web/app.py`/`web/session.py`
 
 ---
 
 ## 9. Phase 3 — pages
 
 ### Landing / idle
-- [ ] **T-3.1** Attract loop: configurable background image/video, event title, "Touch to start"
-- [ ] **T-3.2** Mode selection if more than one capture mode is enabled
-- [ ] **T-3.3** Idle timeout returns from any screen
+- [x] **T-3.1** Attract loop: configurable background image/video, event title, "Touch to start" — `frontend/src/lib/AttractScreen.svelte`, backed by new `GET /session/event` + `GET /session/event/background`
+- [x] **T-3.2** Mode selection if more than one capture mode is enabled — `frontend/src/lib/ModeSelect.svelte`; today's `EventConfig` only carries one `template`, so the endpoint returns a one-element `templates: []` list and the UI collapses straight through to arming — real multi-template support needs an `EventConfig` schema extension, not yet done
+- [x] **T-3.3** Idle timeout returns from any screen — `Settings.kiosk.idle_timeout_s` (config knob), activity-listener timer in `Kiosk.svelte` calls the existing `dismiss()`
 
 ### Gallery
-- [ ] **T-3.4** Thumbnail grid, lazy loading, tap to enlarge
-- [ ] **T-3.5** Per-event enable/disable toggle
-- [ ] **T-3.6** Server-side gallery for the upload target (separate small app — decide: same codebase or standalone)
+- [x] **T-3.4** Thumbnail grid, lazy loading, tap to enlarge — `frontend/src/routes/Gallery.svelte`, backed by `GET /gallery/{event_id}/captures`; serves full-size `/captures/{id}.jpg` directly since no thumb variant exists yet (needs T-2.8)
+- [x] **T-3.5** Per-event enable/disable toggle — gated on `EventConfig.gallery_enabled`; disabled and nonexistent events both 404 identically (no enumeration signal), per photobooth-plan.md's GDPR guidance
+- [x] **T-3.6** Server-side gallery for the upload target — **Resolved: same codebase.** Just another FastAPI router (`web/routers/gallery.py`) + Svelte route, not a separate deployable — no reason for a single-booth app to split process. Frontend's `event_id` discovery is still a placeholder (parsed from the URL path); should switch to the same event-info source `/session/event` uses once there's one shared place for "the active event" on the frontend
 
 ### Admin
-- [ ] **T-3.7** Auth (PIN or long-press corner + token)
-- [ ] **T-3.8** Event switching, event config editor
-- [ ] **T-3.9** Template picker with live preview render
-- [ ] **T-3.10** Live camera/printer/network/disk status
-- [ ] **T-3.11** Test shot · camera reconnect · reprint last · clean shutdown
-- [ ] **T-3.12** **Preflight check screen** — every hardware dependency, green/red per line
-- [ ] **T-3.13** Timings dashboard (surfaces `/debug/timings` for non-dev use)
+- [x] **T-3.7** Auth (PIN or long-press corner + token) — **Resolved: PIN.** `web/routers/admin_auth.py`: `POST /admin/login` (constant-time PIN check) issues an httpOnly, signed, expiring session cookie; `require_admin` FastAPI dependency for downstream admin routers to import. `frontend/src/routes/Admin.svelte` gates a (currently placeholder) admin shell behind it — T-3.8 onward build real content into that shell
+- [x] **T-3.8** Event switching, event config editor — `web/routers/admin.py`'s `/admin/events*` routes, `EventsPanel.svelte`. **Known gap**: `activate` mutates `app.state.active_event_id` live, which the kiosk's `/session/event` reads fresh, but `SessionManager` copies `active_event_id` once at construction and won't pick up a live switch without an app restart — flagged, not fixed (would need editing `web/session.py`, out of this task's scope)
+- [x] **T-3.9** Template picker with live preview render — `/admin/templates*` routes render via `pipeline.compositor.render_variant` against sample fixture imagery, `TemplatesPanel.svelte`
+- [x] **T-3.10** Live camera/printer/network/disk status — `/admin/status`, `StatusPanel.svelte`; printer reports `"not_configured"` (no backend exists yet, Phase 4)
+- [x] **T-3.11** Test shot · camera reconnect · clean shutdown — `/admin/actions/{test-shot,reconnect-camera,shutdown-camera}`, `ActionsPanel.svelte`. Reprint-last skipped (Phase 4, no printer backend). Test-shot bypasses `SessionManager`'s state machine/camera-idle gate entirely (calls the camera client directly) — nothing currently stops an operator from firing it mid-guest-countdown; documented in the route and UI, not gated
+- [x] **T-3.12** **Preflight check screen** — `GET /debug/health` (new, alongside the existing `/debug/traces`/`/debug/timings`) + `PreflightPanel.svelte`. Checks camera connected/idle, preview stream reachable, disk free, network reachable. Camera-settings-match-profile, flash-fires, printer-online, and time-synced are marked `not_available` rather than faked
+- [x] **T-3.13** Timings dashboard (surfaces `/debug/timings` for non-dev use) — `TimingsPanel.svelte`, no backend changes needed (endpoint already existed from Phase 1)
 
 ---
 
 ## 10. Phase 4 — delivery & printing
 
-- [ ] **T-4.1** Durable job queue in SQLite (claim, retry with backoff, dead-letter)
-- [ ] **T-4.2** Upload backends: `LocalDir`, `Sftp`, `S3` behind one interface
-- [ ] **T-4.3** QR generation, unguessable session tokens
-- [ ] **T-4.4** Offline behaviour: queue drains when connectivity returns; QR stays valid
-- [ ] **T-4.5** Retention policy enforced in code
-- [ ] **T-4.6** `NullPrinter` + `CupsBackend` behind one interface
-- [ ] **T-4.7** Print queue, per-session limits, media tracking
-- [ ] **T-4.8** Printer status gates the print button
-- [ ] **T-4.9** Reprint from admin
+- [x] **T-4.1** Durable job queue in SQLite (claim, retry with backoff, dead-letter) — `storage/queue.py`'s `JobQueue` (kind-agnostic: `enqueue`/`claim`/`complete`/`fail`/`list_dead`/`list_pending`) + `run_worker()` generic poll loop. Race-free claim (per-row conditional `UPDATE` with rowcount check, not a single ambiguous subquery `UPDATE`); exponential backoff capped at 1h; dead-letter after `max_attempts`
+- [x] **T-4.2** Upload backends: `LocalDir`, `Sftp`, `S3` behind one interface — `delivery/backend.py`'s `DeliveryBackend` ABC (`upload(local_path, remote_key) -> str`), `LocalDirBackend` (real copy into `output_dir`), `SftpBackend` (`paramiko`), `S3Backend` (`boto3`), both blocking libs wrapped via `asyncio.to_thread`; `build_delivery_backend(config)` factory
+- [x] **T-4.3** QR generation, unguessable session tokens — `storage/db.py`'s `sessions.share_token` column (`secrets.token_urlsafe(18)`, issued once per session in `web/session.py` right after the last shot, before REVIEW), `web/routers/share.py`'s `GET /s/{token}` (session's own captures, generic 404 for unknown tokens) and `GET /s/{token}/qr.png` (PNG QR encoding the share URL, built from the request's own Host header so it resolves correctly when scanned from a different device on the LAN). Backend-only — no kiosk UI displays the QR yet, that's the next wave
+- [x] **T-4.4** Offline behaviour: queue drains when connectivity returns — `delivery/worker.py`'s `DeliveryWorker`, wired into `web/app.py`'s lifespan and live-verified end to end (a 4-shot capture enqueued and completed 4 upload jobs, files landed in `out/uploads/`, structured JSON logs confirmed via `configure_logging`)
+- [x] **T-4.5** Retention policy enforced in code — `storage/retention.py`, wired into `web/app.py`'s lifespan as an always-running (no-op unless `RetentionConfig.enabled`) background sweep
+- [x] **T-4.6** `NullPrinter` + `CupsBackend` behind one interface — `printing/backend.py`. `NullPrinter` returns a job id immediately, marks it done via a background task after `simulated_job_seconds`; `CupsBackend` real `pycups` integration (import-guarded, tested against a monkeypatched `cups.Connection` — never run against real CUPS, not available in this dev environment, smoke-test on the Pi before relying on it live). `build_printer_backend()` returns `None` when `backend: null` — callers (admin/kiosk routes) must treat that as "not configured," not error
+- [x] **T-4.7** Print queue, per-session limits, media tracking — `printing/queue.py`'s `PrintQueue` (limit counts every print job ever enqueued for a session, including dead-lettered ones — deliberately conservative, see the module docstring), `make_print_handler()` bridges a claimed job to `PrinterBackend.submit()`. Wired into `web/app.py`'s lifespan (worker only starts if a printer backend is configured). "Media tracking" surfaces via `PrinterBackend.status()`, not a separate persistence layer
+- [x] **T-4.8** Printer status gates the print button — `GET /session/printer-status`, `POST /session/print` (`kiosk.py`); Kiosk.svelte's review screen shows the Print button only when status is green. `/admin/status` and `/debug/health`'s printer checks now report the real backend instead of the hardcoded `not_configured` stub. Live-verified: printer status green, 2/2-limit enforced (409 on the 3rd print), PDFs landed in `out/prints/`
+- [x] **T-4.9** Reprint from admin — `POST /admin/actions/reprint/{capture_id}` (`admin.py`), deliberately bypasses `PrintQueue`'s per-session limit (calls the printer backend directly, mirroring `test_shot`'s pattern) — live-verified: succeeded immediately after a guest session had already exhausted its 2/2 limit. `ActionsPanel.svelte` gained a capture-id input + Reprint button. T-4.3's frontend half also closed out here: the kiosk review screen now displays `/s/{token}/qr.png`, with `share_token` threaded onto the `StateChanged` event that lands the guest in REVIEW
 
 ---
 
 ## 11. Phase 5 — hardening
 
-- [ ] **T-5.1** systemd units, `Restart=always`, watchdog
-- [ ] **T-5.2** Log rotation, log level per module
-- [ ] **T-5.3** `tools/soak.py` — multi-hour randomized guest flows + fault injection
+- [x] **T-5.1** systemd units, `Restart=always`, watchdog — `deploy/systemd/photobooth.service` (`Type=simple`, `Restart=always`, `RestartSec=5`, dedicated `photobooth` user with `video`/`plugdev`/`dialout` groups for USB access), `deploy/systemd/README.md` (install steps, `journalctl` log surfacing), `just install-systemd`. go2rtc already runs as its own systemd service (confirmed in Phase 0) — no redundant unit created. **Honest gap**: no active `WatchdogSec=`/`sd_notify` liveness pinging — that needs a `web/app.py` code change, not done, flagged in the unit file's own comments rather than silently claimed
+- [x] **T-5.2** Log rotation, log level per module — `telemetry/logging_config.py`'s `configure_logging(LoggingConfig)`, wired as the first lines of `web/app.py`'s `lifespan()`, live-verified (JSON lines confirmed during Phase 4 integration testing). Rotation deliberately left to journald (T-5.1) rather than a redundant file-based handler — nothing in this codebase writes logs to a plain file
+- [x] **T-5.3** `tools/soak.py` — multi-hour randomized guest flows + fault injection — drives the live app's real HTTP/WS surface (arm → capture → dismiss, randomized think-time), reads `/debug/timings` for stats rather than reimplementing capture, tolerant of fault-injected failures (verifies `CAPTURING→IDLE` recovery via `/debug/health` and continues). Live-verified for short runs (0.3 min clean, and against an instance with `download_timeout_pct` forced high) — not run for a real multi-hour stretch or against real Pi hardware
 - [ ] **T-5.4** Fault drill checklist, each with a defined expected behaviour:
   - [ ] Yank camera USB mid-countdown
   - [ ] Yank camera USB mid-download
@@ -398,6 +398,6 @@ All comfortably under the 3.0s exit criterion, with low run-to-run variance at L
 | D2 | Thumb-first vs full+shrink-on-load | Phase 1 | **Resolved: full+shrink.** a6400 has no PTP preview support (§6 T-C3) and full download is faster than a preview round-trip would be anyway |
 | D3 | go2rtc `copy` vs transcode | Phase 1 | **Leaning `copy`** — pipeline works end-to-end, stick has real MJPEG hardware support (§6 T-P1/T-P3); still want the full 30 min soak before fully closing this out |
 | D4 | Upload target (VPS vs S3-compatible) | Phase 4 | Open — build the abstraction first |
-| D5 | Server gallery: same codebase or standalone? | Phase 3 | Open |
+| D5 | Server gallery: same codebase or standalone? | Phase 3 | **Resolved: same codebase.** T-3.6 |
 | D6 | Print sizes: 6×4 only, or strips too? | Phase 2 | Open — affects template schema |
 | D7 | Touchscreen model + resolution | Phase 3 | Open — affects kiosk CSS |

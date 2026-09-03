@@ -35,3 +35,37 @@ storage:
 web:
   host: 0.0.0.0
   port: 8000
+
+events:
+  base_dir: /var/lib/photobooth/events
+  # Venue operator fills this in per booking (must match a directory under
+  # base_dir containing an event.yaml) — no real default makes sense here.
+  active_event_id: ""
+
+kiosk:
+  # Return to the attract loop after 60s of no guest interaction (T-3.3).
+  idle_timeout_s: 60.0
+
+# REQUIRED before going live: uncomment `admin:` below and set a real PIN.
+# Left as-is (no `admin` section at all), `admin.pin` falls back to
+# Settings' obviously-fake default ("changeme") and the app logs a loud
+# "admin_pin_is_default" warning at startup (config/models.py's
+# Settings.load) — it still starts, this is a single-booth kiosk not worth
+# hard-failing boot over, but do not run a real event with the default PIN
+# still active.
+# admin:
+#   pin: "CHANGE-ME-BEFORE-THE-EVENT"
+#   # Optional: set to a fixed random-looking string to make admin sessions
+#   # survive an app restart (see config/models.py's AdminConfig docstring
+#   # for why the default is to generate one fresh each boot instead).
+#   # secret_key: ""
+
+logging:
+  # journald (via deploy/systemd/photobooth.service) captures and rotates
+  # stdout/stderr — see deploy/systemd/README.md. INFO is the right default
+  # for an event; bump camera.* to DEBUG here (uncomment/edit) if diagnosing
+  # a reconnect issue during a rental, without drowning everything else.
+  level: INFO
+  module_levels: {}
+  # module_levels:
+  #   photobooth.camera: DEBUG

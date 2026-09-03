@@ -1,0 +1,17 @@
+# Test-only fixture: 2-slot template used by test_session_manager.py to drive
+# the multi-shot collage flow (T-2.6) without depending on the real
+# templates/collage-2x2.yaml (which needs the placeholder font/frame assets).
+name: "Test Two Slot"
+canvas:
+  width_mm: 152
+  height_mm: 102
+  dpi: 300
+  background: "#ffffff"
+slots:
+  - { x: 0,   y: 0, w: 897, h: 1205, fit: cover }
+  - { x: 897, y: 0, w: 898, h: 1205, fit: cover }
+overlays: []
+variants:
+  print: { dpi: 300, format: jpeg, quality: 95 }
+  web:   { long_edge: 2000, format: jpeg, quality: 85 }
+  thumb: { long_edge: 400,  format: jpeg, quality: 75 }

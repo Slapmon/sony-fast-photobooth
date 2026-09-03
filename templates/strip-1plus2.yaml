@@ -1,0 +1,32 @@
+# "1+2" collage layout — one large slot on top, two smaller slots side by
+# side below. Same canvas size class as collage-2x2.yaml (a standard 6x4"
+# print, 300dpi -> 1795x1205px). See photobooth-plan.md §8 and
+# IMPLEMENTATION_PLAN.md §8 (T-2.5).
+name: "1+2 Strip"
+canvas:
+  width_mm: 152
+  height_mm: 102
+  dpi: 300
+  background: "#ffffff"
+slots:
+  # Large top slot, full width minus margins.
+  - { x: 40,  y: 40,  w: 1715, h: 700, fit: cover }
+  # Two smaller slots side by side below.
+  - { x: 40,  y: 780, w: 837,  h: 385, fit: cover }
+  - { x: 917, y: 780, w: 837,  h: 385, fit: cover }
+overlays:
+  - { type: image, src: "assets/frame.png", x: 0, y: 0, w: 1795, h: 1205 }
+  - type: text
+    content: "{event.couple} · {event.date}"
+    # PLACEHOLDER — not a real font file, just satisfies load-time existence
+    # validation (T-2.1); compositor falls back to a system font with a
+    # logged warning. Drop a real script font in here before real use.
+    font: "assets/PLACEHOLDER_FONT.ttf"
+    size: 48
+    color: "#3a3a3a"
+    anchor: bottom-center
+    y_offset: -12
+variants:
+  print: { dpi: 300, format: jpeg, quality: 95 }
+  web:   { long_edge: 2000, format: jpeg, quality: 85 }
+  thumb: { long_edge: 400,  format: jpeg, quality: 75 }

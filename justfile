@@ -48,3 +48,19 @@ pull-pi-captures host:
 # Frontend dev server (Svelte + Vite).
 frontend-dev:
     cd frontend && npm run dev
+
+# Install/update the systemd unit on the Pi and (re)start it. Assumes the
+# repo is already deployed at ~/photobooth on the Pi (deploy/systemd's
+# photobooth.service defaults to /opt/photobooth — adjust the unit file's
+# WorkingDirectory/ExecStart if your deploy path differs before running
+# this). See deploy/systemd/README.md for the one-time `useradd` step.
+# Usage: just install-systemd admin@pi-host
+install-systemd host:
+    scp deploy/systemd/photobooth.service '{{host}}:/tmp/photobooth.service'
+    ssh {{host}} 'sudo mv /tmp/photobooth.service /etc/systemd/system/photobooth.service && sudo systemctl daemon-reload && sudo systemctl enable --now photobooth.service'
+
+# Run the soak harness (T-5.3) against a running app instance. Defaults to
+# the local dev server; point --base-url at the Pi for a real soak.
+# Usage: just soak *args (e.g. `just soak --minutes 5`)
+soak *args:
+    uv run python tools/soak.py {{args}}

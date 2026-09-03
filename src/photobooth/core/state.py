@@ -25,7 +25,12 @@ ALLOWED_TRANSITIONS: dict[SessionState, frozenset[SessionState]] = {
     SessionState.COUNTDOWN: frozenset({SessionState.CAPTURING, SessionState.IDLE}),
     # IDLE covers a failed capture (camera error mid-flow) — REVIEW is the
     # success path only, a guest never "reviews" a failure.
-    SessionState.CAPTURING: frozenset({SessionState.REVIEW, SessionState.IDLE}),
+    # COUNTDOWN: collage mode (T-2.6) shoots N slots back-to-back — a
+    # successful shot that isn't the template's last slot loops back to
+    # COUNTDOWN for the next one instead of going straight to REVIEW.
+    SessionState.CAPTURING: frozenset(
+        {SessionState.REVIEW, SessionState.IDLE, SessionState.COUNTDOWN}
+    ),
     SessionState.REVIEW: frozenset({SessionState.PROCESSING, SessionState.IDLE}),
     SessionState.PROCESSING: frozenset({SessionState.IDLE}),
 }

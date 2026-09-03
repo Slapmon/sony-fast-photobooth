@@ -1,0 +1,25 @@
+# Single-photo mode's template — one full-bleed slot on the same 6x4"/300dpi
+# canvas as collage-2x2.yaml, so print output is a consistent size regardless
+# of which mode a guest picks. See photobooth-plan.md §8.
+name: "Single Photo"
+canvas:
+  width_mm: 152
+  height_mm: 102
+  dpi: 300
+  background: "#ffffff"
+slots:
+  - { x: 40, y: 40, w: 1715, h: 1125, fit: cover }
+overlays:
+  - { type: image, src: "assets/frame.png", x: 0, y: 0, w: 1795, h: 1205 }
+  - type: text
+    content: "{event.couple} · {event.date}"
+    # PLACEHOLDER — see collage-2x2.yaml's identical note; not a real font.
+    font: "assets/PLACEHOLDER_FONT.ttf"
+    size: 64
+    color: "#3a3a3a"
+    anchor: bottom-center
+    y_offset: -30
+variants:
+  print: { dpi: 300, format: jpeg, quality: 95 }
+  web:   { long_edge: 2000, format: jpeg, quality: 85 }
+  thumb: { long_edge: 400,  format: jpeg, quality: 75 }
