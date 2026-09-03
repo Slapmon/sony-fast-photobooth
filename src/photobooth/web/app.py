@@ -22,7 +22,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from photobooth.camera.client import CameraWorkerClient
@@ -232,3 +233,52 @@ app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+# Serves the built Svelte frontend (`frontend/dist`, `npm run build`) so this
+# app works standalone in production — locally, the Vite dev server has
+# always fronted it instead (vite.config.ts's own docstring: "the same code
+# works unproxied once built and served by the backend itself" — this is
+# that "once built and served" half). Registered LAST so every API router
+# above still wins for its own paths; only unmatched requests reach here.
+#
+# App.svelte's client-side router (path-based, not a real router library)
+# recognizes exactly three URL shapes: `/`, `/admin`, `/gallery/<event_id>` —
+# all three must serve the same `index.html`, letting the bundled JS take
+# over from there. A blanket catch-all route would risk silently shadowing
+# a future API path; three explicit routes plus a trailing static mount for
+# literal files (JS/CSS/favicon) is safer and no harder to maintain.
+FRONTEND_DIST = Path("frontend/dist")
+_FRONTEND_INDEX_MISSING = (
+    "frontend/dist/index.html not found — run `npm run build` in frontend/ first"
+)
+
+
+def _serve_frontend_index() -> FileResponse:
+    index_path = FRONTEND_DIST / "index.html"
+    if not index_path.is_file():
+        raise HTTPException(status_code=503, detail=_FRONTEND_INDEX_MISSING)
+    return FileResponse(index_path)
+
+
+@app.get("/", include_in_schema=False)
+async def serve_kiosk() -> FileResponse:
+    return _serve_frontend_index()
+
+
+@app.get("/admin", include_in_schema=False)
+async def serve_admin() -> FileResponse:
+    return _serve_frontend_index()
+
+
+@app.get("/gallery/{event_id}", include_in_schema=False)
+async def serve_gallery(event_id: str) -> FileResponse:
+    return _serve_frontend_index()
+
+
+if FRONTEND_DIST.is_dir():
+    # Literal built assets (JS/CSS bundles under assets/, favicon.svg, etc.)
+    # — anything not matched by the three routes above falls through to
+    # this, which 404s for a genuinely missing file rather than silently
+    # serving index.html for it.
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST), name="frontend")
