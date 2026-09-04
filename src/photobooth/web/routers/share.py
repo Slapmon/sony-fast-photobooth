@@ -68,15 +68,22 @@ def _resolve_session(db: sqlite3.Connection, token: str) -> dict[str, str]:
 
 
 def _share_url(request: Request, token: str) -> str:
-    """Absolute URL for this token, built from the *incoming request's own*
-    host (not a fixed config value) — this is what makes the QR code scan
-    correctly from a phone on the LAN: the phone opens a DIFFERENT device
-    than the one displaying the QR code, so the URL must be whatever host
-    the kiosk browser itself is actually being viewed at (its LAN IP or
-    hostname), not `localhost` or a relative path. `request.url` already
-    reflects the Host header the kiosk's browser sent, which is correct
-    even when the app is fronted by Vite's dev proxy."""
-    return f"{request.url.scheme}://{request.url.netloc}/s/{token}"
+    """Absolute URL for this token. `DeliveryConfig.public_base_url`, when
+    set, wins outright — that's an operator saying "guests should reach
+    their photo at THIS public server," typically once a real delivery
+    target (e.g. SFTP to an internet-reachable host) is configured, so a
+    phone can open it over mobile data with no need to join the venue
+    Wi-Fi. Unset (the default): fall back to the *incoming request's own*
+    host — what makes the QR scan correctly from a phone on the LAN during
+    local testing, since the phone opens a DIFFERENT device than the one
+    displaying the QR, so the URL must be whatever host the kiosk browser
+    itself is actually being viewed at (its LAN IP), not `localhost`.
+    `request.url` already reflects the Host header the kiosk's browser
+    sent, correct even behind Vite's dev proxy."""
+    base = getattr(request.app.state, "share_public_base_url", "") or (
+        f"{request.url.scheme}://{request.url.netloc}"
+    )
+    return f"{base.rstrip('/')}/s/{token}"
 
 
 @router.get("/{token}")

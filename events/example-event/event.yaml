@@ -1,20 +1,20 @@
-# Example event — see photobooth-plan.md §8 and IMPLEMENTATION_PLAN.md §8
-# (T-2.7). Loaded by config/dev.yaml's events.active_event_id, so `just dev`
-# has a real, loadable event out of the box.
-
 id: example-event
-title: "Anna & Ben's Wedding"
-date: "2026-09-12"
-template: "collage-2x2.yaml"
+title: Anna & Ben's Wedding
+date: '2026-09-12'
+template: collage-2x2.yaml
 modes:
-  - id: single
-    label: "Single Photo"
-    template: "single.yaml"
-  - id: collage
-    label: "Collage"
-    template: "collage-2x2.yaml"
-background_image: ""
+- id: single
+  label: Single Photo
+  template: single.yaml
+- id: collage
+  label: Collage
+  template: collage-2x2.yaml
+background_image: ''
+logo_image: ''
+theme:
+  primary_color: ''
 gallery_enabled: true
 vars:
-  couple: "Anna & Ben"
-  hashtag: "#AnnaAndBen2026"
+  couple: Anna & Ben
+  hashtag: '#AnnaAndBen2026'
+strings: {}

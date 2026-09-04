@@ -15,6 +15,7 @@ import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from photobooth.config.event import DEFAULT_UI_STRINGS
 from photobooth.storage import db as storage_db
 from photobooth.storage.repos import CaptureRepo, SessionRepo
 from photobooth.web.routers import gallery
@@ -120,3 +121,66 @@ def test_disabled_and_nonexistent_are_indistinguishable(
 
     assert disabled_response.status_code == missing_response.status_code == 404
     assert disabled_response.json() == missing_response.json()
+
+
+# ---------------------------------------------------------------------------
+# UI-redesign follow-up: per-event background/logo/theme branding info
+# ---------------------------------------------------------------------------
+
+
+def test_gallery_info_returns_branding_with_no_images_configured(
+    http_client: TestClient, events_dir: Path
+) -> None:
+    _write_event(events_dir, "wedding-1", gallery_enabled=True)
+
+    response = http_client.get("/gallery/wedding-1/info")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "title": "Test Event",
+        "background_image_url": None,
+        "logo_image_url": None,
+        "theme": {"primary_color": ""},
+        "modes": [{"id": "default", "label": "Take Photo"}],
+        "strings": DEFAULT_UI_STRINGS,
+    }
+
+
+def test_gallery_info_disabled_gallery_404s(http_client: TestClient, events_dir: Path) -> None:
+    _write_event(events_dir, "wedding-1", gallery_enabled=False)
+
+    response = http_client.get("/gallery/wedding-1/info")
+
+    assert response.status_code == 404
+
+
+def test_gallery_background_and_logo_serve_uploaded_files(
+    http_client: TestClient, events_dir: Path
+) -> None:
+    event_dir = events_dir / "wedding-1"
+    _write_event(events_dir, "wedding-1", gallery_enabled=True)
+    (event_dir / "event.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": "wedding-1",
+                "title": "Test Event",
+                "template": "collage-2x2.yaml",
+                "gallery_enabled": True,
+                "background_image": "background.jpg",
+                "logo_image": "logo.png",
+            }
+        )
+    )
+    (event_dir / "background.jpg").write_bytes(b"\xff\xd8\xff\xe0fake-jpeg")
+    (event_dir / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\nfake-png")
+
+    info = http_client.get("/gallery/wedding-1/info").json()
+    assert info["background_image_url"] == "/gallery/wedding-1/background"
+    assert info["logo_image_url"] == "/gallery/wedding-1/logo"
+
+    background_response = http_client.get("/gallery/wedding-1/background")
+    logo_response = http_client.get("/gallery/wedding-1/logo")
+    assert background_response.status_code == 200
+    assert background_response.content.startswith(b"\xff\xd8\xff")
+    assert logo_response.status_code == 200
+    assert logo_response.content.startswith(b"\x89PNG")

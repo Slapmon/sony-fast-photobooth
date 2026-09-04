@@ -8,16 +8,19 @@
 
   Phase 3 (IMPLEMENTATION_PLAN.md §9) layers the attract loop (T-3.1) and an
   idle timeout (T-3.3) on top of that same server-driven `sessionState`.
-  IDLE renders AttractScreen.svelte directly — every guest choice (which
-  capture mode, or "go to the gallery instead") is a real button on that one
-  screen, there's no separate mode-select step or implicit "touch anywhere"
-  affordance (see AttractScreen.svelte's own header comment). From any
-  *other* screen, activity listeners below auto-dismiss back to IDLE after a
-  configurable stretch of no guest input, fetched from GET /session/event's
-  idle_timeout_s.
+  IDLE renders AttractScreen.svelte (branded background+logo+title/date);
+  BottomNav.svelte is rendered here, alongside it, on both the idle AND
+  review screens — the guest's mode/gallery choices are a persistent bar,
+  not a one-off "Done" button (see BottomNav's own header comment). Picking
+  a mode from review dismisses the current session and starts the new one
+  directly. From any other screen, activity listeners below auto-dismiss
+  back to IDLE after a configurable stretch of no guest input, fetched from
+  GET /session/event's idle_timeout_s.
 -->
 <script lang="ts">
   import AttractScreen, { type EventInfo } from '../lib/AttractScreen.svelte'
+  import BottomNav from '../lib/BottomNav.svelte'
+  import { themeStyle } from '../lib/theme'
 
   type SessionState = 'idle' | 'armed' | 'countdown' | 'capturing' | 'review' | 'processing'
 
@@ -53,6 +56,7 @@
   let printMessageOk = $state(false)
 
   let eventInfo = $state<EventInfo | null>(null)
+  let autoStartedFromQuery = false
 
   // T-3.3: default matches KioskConfig.idle_timeout_s's pydantic default
   // (src/photobooth/config/models.py) until GET /session/event's response
@@ -196,7 +200,17 @@
     idleTimeoutS = eventInfo.idle_timeout_s
   }
 
-  function handleStart(modeId: string) {
+  // BottomNav's single onStart handler works from BOTH the attract screen
+  // (sessionState 'idle') and the review screen ('review' — replaces the
+  // old standalone "Done" button entirely, see this file's header comment).
+  // From review, the state machine only allows REVIEW -> {PROCESSING,IDLE},
+  // never straight to ARMED, so dismiss() first and only then arm the new
+  // mode — dismiss()'s fetch already awaits the server completing that
+  // transition before resolving, so the follow-up arm is never racing it.
+  async function handleStart(modeId: string) {
+    if (sessionState === 'review') {
+      await dismiss()
+    }
     void startSession(modeId)
   }
 
@@ -239,6 +253,19 @@
     void loadEventInfo()
   })
 
+  // Lets the gallery page's BottomNav (a separate route/component, no
+  // shared session state) start a mode in one tap via `/?mode=<id>` rather
+  // than bouncing the guest back to the attract screen to tap again.
+  $effect(() => {
+    if (autoStartedFromQuery || eventInfo === null || sessionState !== 'idle') return
+    const mode = new URLSearchParams(window.location.search).get('mode')
+    if (mode) {
+      autoStartedFromQuery = true
+      history.replaceState(null, '', window.location.pathname)
+      void handleStart(mode)
+    }
+  })
+
   $effect(() => {
     if (sessionState === 'review') void loadPrinterStatus()
   })
@@ -266,26 +293,30 @@
   })
 </script>
 
-<div class="stage">
+<div class="stage" style={themeStyle(eventInfo?.theme)}>
   <img class="preview" src="/preview/stream" alt="" />
 
   {#if sessionState === 'idle'}
-    <AttractScreen event={eventInfo} onStart={handleStart} onGallery={handleGallery} />
+    <AttractScreen event={eventInfo} />
   {:else if sessionState === 'countdown'}
     <div class="overlay countdown">{countdownValue}</div>
   {:else if sessionState === 'capturing'}
-    <div class="overlay">Capturing…</div>
+    <div class="overlay">{eventInfo?.strings.capturing_label ?? 'Capturing…'}</div>
   {:else if sessionState === 'review' && reviewImageUrl}
     <div class="overlay review">
-      <img src={reviewImageUrl} alt="Your capture" onload={reportDecodeTime} />
-      <div class="review-actions">
-        {#if printerStatus?.status === 'green'}
-          <button onclick={printPhoto} disabled={printBusy}>
-            {printBusy ? 'Printing…' : 'Print'}
-          </button>
-        {/if}
-        <button onclick={dismiss}>Done</button>
+      <div class="photo-frame rise-in">
+        <img src={reviewImageUrl} alt="Your capture" onload={reportDecodeTime} />
       </div>
+
+      {#if printerStatus?.status === 'green'}
+        <div class="review-toolbar">
+          <button onclick={printPhoto} disabled={printBusy}>
+            {printBusy
+              ? (eventInfo?.strings.print_button_busy ?? 'Printing…')
+              : (eventInfo?.strings.print_button ?? 'Print')}
+          </button>
+        </div>
+      {/if}
       {#if printMessage}
         <p
           class="print-message"
@@ -298,10 +329,19 @@
       {#if shareToken}
         <div class="qr-corner">
           <img src={`/s/${shareToken}/qr.png`} alt="Scan with your phone to keep this" />
-          <span>Scan to get your photo</span>
+          <span>{eventInfo?.strings.qr_caption ?? 'Scan to get your photo'}</span>
         </div>
       {/if}
     </div>
+  {/if}
+
+  {#if sessionState === 'idle' || sessionState === 'review'}
+    <BottomNav
+      modes={eventInfo?.modes ?? []}
+      onStart={handleStart}
+      onGallery={handleGallery}
+      galleryLabel={eventInfo?.strings.gallery_word ?? 'Gallery'}
+    />
   {/if}
 
   {#if errorMessage}
@@ -338,86 +378,112 @@
     border: none;
   }
 
+  /* LCD exposure-counter treatment (this app's design signature — see
+     app.css's header comment) at full display scale: an analog camera's
+     digital frame counter, not a plain fullscreen number. */
   .countdown {
-    font-size: 10rem;
-    font-weight: 700;
-    font-family: var(--font-display);
+    font-size: 11rem;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--color-primary);
+    text-shadow:
+      0 0 40px color-mix(in srgb, var(--color-primary) 70%, transparent),
+      0 4px 30px rgba(0, 0, 0, 0.5);
   }
 
-  /* Direct-child selectors — .qr-corner below also contains an <img> and a
-     button-shaped affordance, and must not inherit the capture photo's
-     sizing or the "Done"/"Print" pill styling. */
-  .review > img {
-    max-width: 80vw;
-    max-height: 70vh;
+  .review .photo-frame {
+    max-width: 88vw;
+    max-height: 76vh;
+  }
+
+  .review .photo-frame img {
+    max-width: calc(88vw - 1rem);
+    max-height: calc(76vh - 1rem);
     object-fit: contain;
-    border-radius: var(--radius);
-    box-shadow: var(--shadow-md);
   }
 
-  .review-actions {
-    display: flex;
-    gap: 1rem;
+  .review-toolbar {
+    position: absolute;
+    top: 1.25rem;
+    right: 1.25rem;
   }
 
-  .review-actions button {
-    font-size: 1.3rem;
-    padding: 0.75rem 2.5rem;
+  .review-toolbar button {
+    font-size: 1.1rem;
+    font-weight: 500;
+    padding: 0.6rem 1.85rem;
     border: none;
-    border-radius: 999px;
+    border-radius: var(--radius);
     background: var(--color-primary);
     color: var(--color-primary-contrast);
+    box-shadow: var(--shadow-md);
+    transition:
+      background-color 200ms var(--ease-spring),
+      transform 150ms var(--ease-spring);
   }
 
-  .review-actions button:hover:not(:disabled) {
+  .review-toolbar button:hover:not(:disabled) {
     background: var(--color-primary-hover);
   }
 
-  .review-actions button:disabled {
+  .review-toolbar button:active:not(:disabled) {
+    transform: scale(0.96);
+  }
+
+  .review-toolbar button:disabled {
     opacity: 0.6;
     cursor: not-allowed;
   }
 
   .print-message {
+    position: absolute;
+    top: 4.5rem;
+    right: 1.25rem;
     background: var(--color-surface);
     padding: 0.5rem 1.1rem;
     border-radius: var(--radius-sm);
     font-size: 1rem;
     margin: 0;
+    max-width: 20rem;
   }
 
   /* Small corner placement (T-4.3's frontend half) — the guest's own photo
      stays the focus of the review screen, the QR code is a secondary
-     affordance for taking it with them. */
+     affordance for taking it with them. Sits above BottomNav, not behind
+     it. */
   .qr-corner {
     position: absolute;
-    bottom: 1.25rem;
+    bottom: 7rem;
     right: 1.25rem;
+    z-index: 6;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.25rem;
-    background: var(--color-surface);
-    padding: 0.5rem;
-    border-radius: var(--radius-sm);
-    box-shadow: var(--shadow-md);
+    gap: 0.4rem;
+    background: #f7f3ea;
+    padding: 0.85rem;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg);
   }
 
   .qr-corner img {
-    width: 6rem;
-    height: 6rem;
+    width: 9.5rem;
+    height: 9.5rem;
   }
 
   .qr-corner span {
-    font-size: 0.7rem;
-    color: var(--color-ink-muted);
+    font-size: 0.8rem;
+    color: #5c5342;
+    text-align: center;
   }
 
   .error {
     position: absolute;
-    bottom: 1.5rem;
+    bottom: 7rem;
     left: 50%;
     transform: translateX(-50%);
+    z-index: 6;
     background: var(--color-danger-dot);
     color: #fff;
     padding: 0.6rem 1.25rem;

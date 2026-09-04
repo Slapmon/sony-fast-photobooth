@@ -20,6 +20,21 @@
         ],
         "createdAt": "2026-09-01T14:06:06.276Z",
         "reason": "false positive: line 53 is a code comment mentioning <img>, not an actual image tag; the real <img> at ~L236 has a bound src"
+      },
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "frontend/src/app.css"
+        ],
+        "createdAt": "2026-09-03T21:22:46.712Z",
+        "reason": "false positive: .photo-frame img{} is a CSS selector rule in a stylesheet, not an actual <img> element"
+      },
+      {
+        "rule": "bounce-easing",
+        "value": "var(--ease-spring)",
+        "createdAt": "2026-09-03T21:59:39.426Z",
+        "reason": "false positive: --ease-spring is cubic-bezier(0.16,1,0.3,1), a monotonic ease-out-expo curve with no overshoot/oscillation; heuristic matched the word 'spring' in the token name, not actual bounce behavior"
       }
     ]
   }

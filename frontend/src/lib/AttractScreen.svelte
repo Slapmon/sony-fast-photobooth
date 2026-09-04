@@ -1,75 +1,48 @@
 <!--
   Attract loop / landing screen (IMPLEMENTATION_PLAN.md T-3.1,
   photobooth-plan.md §7 "Landing / idle screen"). Shown while the session is
-  IDLE. Renders the active event's background (image or looping video) with
-  title/date overlaid, plus explicit buttons: one per guest-facing capture
-  mode (e.g. "Single Photo", "Collage" — GET /session/event's `modes`) and
-  one that goes straight to the event's gallery. No implicit "touch anywhere
-  to start" and no separate mode-select screen — every choice is a real,
-  visible button on this one screen.
+  IDLE: the event's branded background+logo (EventBackground.svelte) with
+  title/date over it. The guest's actual choices (capture mode, gallery)
+  live in BottomNav.svelte, rendered by Kiosk.svelte alongside this — kept
+  separate so the exact same nav bar can also appear on the review screen
+  and the gallery page without duplicating this component's background
+  logic there.
 -->
 <script lang="ts">
+  import EventBackground, { type BackgroundInfo } from './EventBackground.svelte'
+  import type { EventThemeInfo } from './theme'
+
   export interface EventMode {
     id: string
     label: string
   }
 
-  export interface EventInfo {
+  export interface EventInfo extends BackgroundInfo {
     event_id: string
     title: string
     date: string
-    background_image_url: string | null
     modes: EventMode[]
+    theme: EventThemeInfo
+    strings: Record<string, string>
     idle_timeout_s: number
   }
 
-  const {
-    event,
-    onStart,
-    onGallery,
-  }: { event: EventInfo | null; onStart: (modeId: string) => void; onGallery: () => void } =
-    $props()
-
-  const VIDEO_EXTENSIONS = ['.mp4', '.webm', '.mov', '.m4v']
-
-  function isVideo(url: string): boolean {
-    const lower = url.toLowerCase()
-    return VIDEO_EXTENSIONS.some((ext) => lower.endsWith(ext))
-  }
+  const { event }: { event: EventInfo | null } = $props()
 </script>
 
 <div class="attract">
-  {#if event?.background_image_url}
-    {#if isVideo(event.background_image_url)}
-      <video
-        class="background"
-        src={event.background_image_url}
-        autoplay
-        muted
-        loop
-        playsinline
-      ></video>
-    {:else}
-      <img class="background" src={event.background_image_url} alt="" />
-    {/if}
-  {/if}
-
-  <div class="scrim"></div>
+  <EventBackground info={event} />
 
   <div class="content">
     {#if event?.title}
-      <h1 class="title">{event.title}</h1>
+      <h1 class="title rise-in" style="animation-delay: 60ms">{event.title}</h1>
     {/if}
     {#if event?.date}
-      <p class="date">{event.date}</p>
+      <p class="date rise-in" style="animation-delay: 140ms">{event.date}</p>
     {/if}
-
-    <div class="buttons">
-      {#each event?.modes ?? [] as mode (mode.id)}
-        <button class="mode-btn" onclick={() => onStart(mode.id)}>{mode.label}</button>
-      {/each}
-      <button class="gallery-btn" onclick={onGallery}>Gallery</button>
-    </div>
+    <p class="cta rise-in" style="animation-delay: 220ms">
+      {event?.strings.attract_cta ?? 'Touch a button below to start'}
+    </p>
   </div>
 </div>
 
@@ -79,23 +52,7 @@
     inset: 0;
     width: 100%;
     height: 100%;
-    background: #000;
     color: #fff;
-    overflow: hidden;
-  }
-
-  .background {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  .scrim {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.25) 0%, rgba(0, 0, 0, 0.6) 100%);
   }
 
   .content {
@@ -108,66 +65,32 @@
     gap: 0.75rem;
     text-align: center;
     padding: 2rem;
+    padding-bottom: 10rem; /* keeps title/date clear of BottomNav */
     box-sizing: border-box;
   }
 
   .title {
-    font-size: 3.25rem;
+    font-size: 3.5rem;
     margin: 0;
     font-weight: 400;
+    letter-spacing: -0.01em;
     font-family: var(--font-display);
+    text-shadow: 0 2px 20px rgba(0, 0, 0, 0.35);
   }
 
   .date {
-    font-size: 1.5rem;
+    font-size: 1.35rem;
     margin: 0;
-    opacity: 0.85;
+    opacity: 0.9;
+    letter-spacing: 0.01em;
+    text-shadow: 0 1px 8px rgba(0, 0, 0, 0.3);
   }
 
-  .buttons {
+  .cta {
     margin-top: 2.5rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1.25rem;
-    justify-content: center;
-  }
-
-  .mode-btn,
-  .gallery-btn {
-    font-size: 1.75rem;
-    padding: 1rem 2.75rem;
-    border: none;
-    border-radius: 999px;
-    cursor: pointer;
-  }
-
-  .mode-btn {
-    background: var(--color-primary);
-    color: var(--color-primary-contrast);
-    animation: pulse 2s ease-in-out infinite;
-  }
-
-  .mode-btn:hover {
-    background: var(--color-primary-hover);
-  }
-
-  .gallery-btn {
-    background: transparent;
-    color: #fff;
-    border: 2px solid rgba(255, 255, 255, 0.7);
-  }
-
-  .gallery-btn:hover {
-    background: rgba(255, 255, 255, 0.15);
-  }
-
-  @keyframes pulse {
-    0%,
-    100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.55;
-    }
+    font-size: 0.85rem;
+    opacity: 0.7;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
   }
 </style>

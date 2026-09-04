@@ -1,67 +1,92 @@
 /* Photobooth design tokens — one palette shared by the kiosk, gallery, and
-   admin surfaces. Pinned to a single light theme (`color-scheme: light`)
-   rather than `light dark`: the previous `light dark` setting let browsers
-   in dark mode swap in a white default text color while components with an
-   explicit *light* background (e.g. admin's yellow note boxes) kept their
-   background fixed — white-on-yellow. Every color below is an explicit
-   foreground/background pair, so nothing is left to a browser default.
+   admin surfaces. Pinned to a single theme (`color-scheme: light`, meaning
+   "don't apply the browser's own dark-mode UA overrides" — NOT "this looks
+   light") so every color stays exactly what's defined here regardless of
+   the visitor's OS setting. Every color below is an explicit
+   foreground/background pair.
+
+   Design direction: "darkroom instrument." A photobooth is a piece of
+   photographic apparatus, not a SaaS product — the palette leans into that:
+   warm near-black (an actual darkroom, not a generic dark-mode default),
+   one accent (flash-bulb amber, not the "acid-green/vermilion-on-black"
+   cliché), and a tabular-mono "LCD counter" treatment (.lcd) for
+   countdown/shot numbers, echoing an analog camera's exposure counter.
+   Buttons are rounded rectangles, not pills — a considered shape, not the
+   default "everything is a lozenge" look.
 */
 :root {
   color-scheme: light;
 
-  /* Warm neutrals — paper background, ink text. Event-appropriate (not a
-     stark white/black SaaS look), but plain enough to stay legible on a
-     kiosk touchscreen in variable venue lighting. */
-  --color-bg: #faf7f2;
-  --color-surface: #ffffff;
-  --color-surface-alt: #f3ede2;
-  --color-border: #e3dbcb;
-  --color-ink: #2a2420;
-  --color-ink-muted: #6f6558;
+  /* Darkroom black — warm (brown undertone), not neutral #0a0a0a. This is
+     now the base for the WHOLE app, not just kiosk overlays: previously
+     admin was a warm-cream light theme while the kiosk was already dark,
+     an inconsistent brand. One dark instrument-panel language throughout
+     is also the practical choice for an operator working a dim venue. */
+  --color-bg: #16130f;
+  --color-surface: #211c16;
+  --color-surface-alt: #2a2419;
+  --color-border: #3a3327;
+  --color-border-strong: #4d4433;
+  --color-ink: #f3ede1;
+  --color-ink-muted: #a89c86;
 
-  /* Brand accent — terracotta. Used for primary actions and the one accent
-     color guests see (active tab, primary button, focus ring). */
-  --color-primary: #b1462f;
-  --color-primary-hover: #96381f;
-  --color-primary-contrast: #ffffff;
+  /* Flash-bulb amber — warm gold, moderate saturation (~70%), not neon.
+     The one accent an event's admin theme (config/event.py's EventTheme)
+     overrides — see theme.ts. */
+  --color-primary: #dc9c39;
+  --color-primary-hover: #c0842c;
+  --color-primary-contrast: #17130e;
 
-  /* Semantic status pairs — background+foreground always defined together
-     so contrast is guaranteed regardless of theme. Used by StatusRow's
-     dot color and by inline note/error/success text. */
-  --color-success-bg: #e4f3ea;
-  --color-success-fg: #1f6b45;
-  --color-success-dot: #2f9e5f;
+  /* Semantic status pairs, tuned for the dark base — a tinted dark chip +
+     a light-enough foreground, not a pale pastel card (a pale card on a
+     dark page is exactly how the earlier "white on yellow" bug happened;
+     every pair here is built and read together against --color-surface). */
+  --color-success-bg: #1c2b1f;
+  --color-success-fg: #82c795;
+  --color-success-dot: #4fa968;
 
-  --color-danger-bg: #fbe9e7;
-  --color-danger-fg: #96271d;
-  --color-danger-dot: #c1382b;
+  --color-danger-bg: #2e1a17;
+  --color-danger-fg: #e2897b;
+  --color-danger-dot: #c24b3e;
 
-  --color-warning-bg: #fbeed2;
-  --color-warning-fg: #7a4b06;
-  --color-warning-dot: #c98a1a;
+  --color-warning-bg: #2c2314;
+  --color-warning-fg: #e3c583;
+  --color-warning-dot: #c99a3d;
 
-  --color-neutral-bg: #eeebe5;
-  --color-neutral-fg: #57514a;
-  --color-neutral-dot: #9a9186;
+  --color-neutral-bg: #26221b;
+  --color-neutral-fg: #a89c86;
+  --color-neutral-dot: #6f6552;
 
-  /* Full-screen guest-facing overlays (attract loop, countdown, mode
-     select) sit on top of the live camera preview, not the paper
-     background above — always dark-on-image for legibility regardless of
-     what's behind them. */
-  --color-overlay-bg: rgba(20, 16, 12, 0.55);
+  /* Full-screen guest-facing scrims (attract loop, countdown, review) sit
+     on top of the live camera preview or an event background image —
+     always dark-on-image for legibility regardless of what's behind them.
+     Now close in hue to --color-bg above (one dark language, not two). */
+  --color-overlay-bg: rgba(15, 12, 9, 0.6);
   --color-overlay-ink: #ffffff;
 
-  --radius: 10px;
-  --radius-sm: 6px;
-  --shadow-sm: 0 1px 2px rgba(42, 36, 32, 0.08), 0 1px 1px rgba(42, 36, 32, 0.05);
-  --shadow-md: 0 4px 16px rgba(42, 36, 32, 0.12);
+  /* Considered, restrained radii — rounded rectangles, not pills. */
+  --radius-sm: 8px;
+  --radius: 14px;
+  --radius-lg: 22px;
+  --radius-pill: 999px; /* reserved for tiny badges only, never buttons */
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 1px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 10px 28px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.55);
+
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
 
   --font-sans:
     system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  /* Guest-facing display type only (attract-screen title) — a serif from
-     the system font stack, no network font fetch (venues may have no/weak
-     internet, per photobooth-plan.md's offline-robustness stance). */
+  /* Reserved narrowly for the guest's own event title (a wedding/party
+     name reads better engraved than stencilled) — everywhere else in the
+     UI stays on --font-sans/--font-mono. No network font fetch (venues
+     may have no/weak internet, per photobooth-plan.md's
+     offline-robustness stance). */
   --font-display: Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', serif;
+  /* The LCD-counter signature (.lcd) and any tabular data (admin timings). */
+  --font-mono:
+    'SF Mono', 'Cascadia Code', Consolas, 'Menlo', 'Liberation Mono', monospace;
 
   font-family: var(--font-sans);
 }
@@ -74,6 +99,7 @@ body {
   margin: 0;
   background: var(--color-bg);
   color: var(--color-ink);
+  line-height: 1.55;
 }
 
 button,
@@ -96,42 +122,58 @@ a:focus-visible {
   outline-offset: 2px;
 }
 
-/* Shared admin-panel building blocks — global (not component-scoped) so
-   every panel (Status/Preflight/Templates/Actions/Timings/Events) gets the
-   same button/card/note look without re-declaring it per component. */
+/* Shared building blocks — global (not component-scoped) so every surface
+   (admin panels, kiosk, gallery) gets the same button/card/note look
+   without re-declaring it per component. Rounded rectangles, not pills. */
 button.primary {
-  padding: 0.55rem 1.25rem;
+  padding: 0.6rem 1.3rem;
   border: none;
   border-radius: var(--radius-sm);
   background: var(--color-primary);
   color: var(--color-primary-contrast);
   font-size: 0.95rem;
+  font-weight: 600;
+  transition:
+    background-color 200ms var(--ease-spring),
+    transform 150ms var(--ease-spring);
 }
 
 button.primary:hover:not(:disabled) {
   background: var(--color-primary-hover);
 }
 
+button.primary:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
 button.primary:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
 button.secondary {
-  padding: 0.5rem 1.1rem;
-  border: 1px solid var(--color-border);
+  padding: 0.55rem 1.15rem;
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   color: var(--color-ink);
   font-size: 0.95rem;
+  font-weight: 600;
+  transition:
+    background-color 200ms var(--ease-spring),
+    transform 150ms var(--ease-spring);
 }
 
 button.secondary:hover:not(:disabled) {
   background: var(--color-surface-alt);
 }
 
+button.secondary:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
 button.secondary:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
@@ -146,7 +188,7 @@ button.secondary:disabled {
   font-size: 0.9rem;
   background: var(--color-warning-bg);
   color: var(--color-warning-fg);
-  border: 1px solid var(--color-warning-fg);
+  border: 1px solid color-mix(in srgb, var(--color-warning-fg) 35%, transparent);
   padding: 0.75rem;
   border-radius: var(--radius-sm);
   margin: 0;
@@ -160,4 +202,57 @@ button.secondary:disabled {
 .success-text {
   color: var(--color-success-fg);
   margin: 0;
+}
+
+/* "Photo in a frame" bezel — a paper-mat border for the guest's captured
+   image (kiosk review) and gallery thumbnails/lightbox, floating a warm
+   print against the darkroom-black page: a physical photograph emerging
+   from the dark, not a bare <img>. Cheap to render (padding + background,
+   no blur/filters). */
+.photo-frame {
+  display: inline-block;
+  background: #f7f3ea;
+  padding: 0.5rem;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+
+.photo-frame img {
+  display: block;
+  border-radius: calc(var(--radius) - 0.35rem);
+}
+
+/* LCD counter — the signature element: countdown numbers and any
+   shot/frame index render like an analog camera's digital exposure
+   counter or date-imprint, not a plain number. */
+.lcd {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  background: #0d0b08;
+  color: var(--color-primary);
+  padding: 0.35rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 45%, transparent);
+  text-shadow: 0 0 10px color-mix(in srgb, var(--color-primary) 60%, transparent);
+}
+
+/* Staggered entrance — fade + rise, applied via inline
+   `style="animation-delay: ...ms"` on a per-item basis where a cascade is
+   wanted (attract-screen content, bottom-nav buttons, gallery grid). */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.rise-in {
+  animation: rise-in 480ms var(--ease-spring) both;
 }

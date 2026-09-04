@@ -114,98 +114,122 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # the event loop is serving any requests, and _wait_for_worker right
     # after it is a blocking poll too — there's nothing concurrent for an
     # async subprocess API to help with at this point.
+    #
+    # Everything from here on is nested in try/finally, each level closing
+    # exactly the resource it opened — not just the single try/finally
+    # around `yield` that used to be here. A startup failure anywhere below
+    # (a bad printer/delivery config, a broken event file, etc.) used to
+    # leak the worker subprocess: it was spawned, but the only cleanup path
+    # was the finally block wrapping `yield`, which a pre-yield exception
+    # skips entirely. That's exactly what happened deploying to the Pi — a
+    # misconfigured CupsBackend raised before `yield`, and the orphaned
+    # worker process sat holding camera.worker_port until killed by hand.
     worker_process = subprocess.Popen(_worker_args(settings))  # noqa: ASYNC220
-    _wait_for_worker("127.0.0.1", settings.camera.worker_port, _WORKER_READY_TIMEOUT_S)
-
-    camera_client = CameraWorkerClient("127.0.0.1", settings.camera.worker_port)
     try:
-        await camera_client.connect()
-    except (CameraError, CameraDisconnectedError) as exc:
-        logger.warning("camera_connect_failed", error=str(exc))
+        _wait_for_worker("127.0.0.1", settings.camera.worker_port, _WORKER_READY_TIMEOUT_S)
 
-    conn = storage_db.connect(settings.storage.sqlite_path)
+        camera_client = CameraWorkerClient("127.0.0.1", settings.camera.worker_port)
+        try:
+            await camera_client.connect()
+        except (CameraError, CameraDisconnectedError) as exc:
+            logger.warning("camera_connect_failed", error=str(exc))
 
-    # Delivery (T-4.2/T-4.4): uploads are enqueued, never called inline, so a
-    # target being unreachable degrades to retry-with-backoff rather than a
-    # lost photo. See delivery/worker.py's module docstring for the full
-    # contract this wiring follows.
-    job_queue = JobQueue(conn)
-    delivery_backend = build_delivery_backend(settings.delivery)
-    delivery_worker = DeliveryWorker(job_queue, delivery_backend)
-    delivery_worker.start()
-    if settings.delivery.backend == "local":
-        settings.delivery.local.output_dir.mkdir(parents=True, exist_ok=True)
+        conn = storage_db.connect(settings.storage.sqlite_path)
+        try:
+            # Delivery (T-4.2/T-4.4): uploads are enqueued, never called
+            # inline, so a target being unreachable degrades to
+            # retry-with-backoff rather than a lost photo. See
+            # delivery/worker.py's module docstring for the full contract.
+            job_queue = JobQueue(conn)
+            delivery_backend = build_delivery_backend(settings.delivery)
+            delivery_worker = DeliveryWorker(job_queue, delivery_backend)
+            delivery_worker.start()
+            if settings.delivery.backend == "local":
+                settings.delivery.local.output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Printing (T-4.6/T-4.7): backend=None means printing is disabled for
-    # this profile — no worker task is started, and admin/kiosk routes must
-    # treat a None printer_backend as "not configured" rather than erroring.
-    printer_backend = build_printer_backend(settings.printing)
-    print_queue = PrintQueue(job_queue, settings.printing.cups.print_limit_per_session)
-    print_stop_event = asyncio.Event()
-    print_task: asyncio.Task[None] | None = None
-    if printer_backend is not None:
-        print_task = asyncio.create_task(
-            run_worker(
-                job_queue,
-                kind="print",
-                handler=make_print_handler(printer_backend),
-                stop_event=print_stop_event,
+            # Printing (T-4.6/T-4.7): backend=None means printing is
+            # disabled for this profile — no worker task is started, and
+            # admin/kiosk routes must treat a None printer_backend as "not
+            # configured" rather than erroring.
+            printer_backend = build_printer_backend(settings.printing)
+            print_queue = PrintQueue(job_queue, settings.printing.cups.print_limit_per_session)
+            print_stop_event = asyncio.Event()
+            print_task: asyncio.Task[None] | None = None
+            if printer_backend is not None:
+                print_task = asyncio.create_task(
+                    run_worker(
+                        job_queue,
+                        kind="print",
+                        handler=make_print_handler(printer_backend),
+                        stop_event=print_stop_event,
+                    )
+                )
+
+            # Retention (T-4.5): always started — a no-op loop when
+            # settings.retention.enabled is False, per run_retention_sweep's
+            # own contract, so there's no separate enabled-branch needed.
+            retention_stop_event = asyncio.Event()
+            retention_task = asyncio.create_task(
+                run_retention_sweep(
+                    conn, CAPTURES_DIR, settings.retention, stop_event=retention_stop_event
+                )
             )
-        )
 
-    # Retention (T-4.5): always started — a no-op loop when
-    # settings.retention.enabled is False, per run_retention_sweep's own
-    # contract, so there's no separate enabled-branch needed here.
-    retention_stop_event = asyncio.Event()
-    retention_task = asyncio.create_task(
-        run_retention_sweep(conn, CAPTURES_DIR, settings.retention, stop_event=retention_stop_event)
-    )
+            session_manager = SessionManager(
+                camera=camera_client,
+                db=conn,
+                captures_dir=CAPTURES_DIR,
+                events_dir=settings.events.base_dir,
+                templates_dir=TEMPLATES_DIR,
+                active_event_id=settings.events.active_event_id,
+                job_queue=job_queue,
+            )
+            preview_proxy = PreviewProxy(
+                settings.preview.stream_url, settings.preview.connect_timeout_s
+            )
+            app.state.session_manager = session_manager
+            app.state.preview_proxy = preview_proxy
+            app.state.worker_process = worker_process
+            app.state.camera_client = camera_client
+            app.state.db = conn
+            # Read by the kiosk router's /session/event endpoint (T-3.1) to
+            # serve the active event's public info to the attract loop —
+            # kept as plain app.state attributes (like everything else
+            # above) rather than stashing the whole Settings object, so it
+            # stays a two-line addition.
+            app.state.events_dir = settings.events.base_dir
+            app.state.active_event_id = settings.events.active_event_id
+            app.state.kiosk_idle_timeout_s = settings.kiosk.idle_timeout_s
+            # Read by admin/kiosk routers for delivery/print status,
+            # submitting print jobs, and the printer-status gate on the
+            # guest print button.
+            app.state.job_queue = job_queue
+            app.state.printer_backend = printer_backend
+            app.state.print_queue = print_queue
+            # Read by web/routers/share.py's QR generation — overrides the
+            # host guests are sent to (see DeliveryConfig.public_base_url's
+            # own docstring for when/why to set this).
+            app.state.share_public_base_url = settings.delivery.public_base_url
 
-    session_manager = SessionManager(
-        camera=camera_client,
-        db=conn,
-        captures_dir=CAPTURES_DIR,
-        events_dir=settings.events.base_dir,
-        templates_dir=TEMPLATES_DIR,
-        active_event_id=settings.events.active_event_id,
-        job_queue=job_queue,
-    )
-    preview_proxy = PreviewProxy(settings.preview.stream_url, settings.preview.connect_timeout_s)
-    app.state.session_manager = session_manager
-    app.state.preview_proxy = preview_proxy
-    app.state.worker_process = worker_process
-    app.state.camera_client = camera_client
-    app.state.db = conn
-    # Read by the kiosk router's /session/event endpoint (T-3.1) to serve
-    # the active event's public info to the attract loop — kept as plain
-    # app.state attributes (like everything else above) rather than
-    # stashing the whole Settings object, so it stays a two-line addition.
-    app.state.events_dir = settings.events.base_dir
-    app.state.active_event_id = settings.events.active_event_id
-    app.state.kiosk_idle_timeout_s = settings.kiosk.idle_timeout_s
-    # Read by admin/kiosk routers for delivery/print status, submitting
-    # print jobs, and the printer-status gate on the guest print button.
-    app.state.job_queue = job_queue
-    app.state.printer_backend = printer_backend
-    app.state.print_queue = print_queue
-
-    try:
-        yield
+            try:
+                yield
+            finally:
+                print_stop_event.set()
+                if print_task is not None:
+                    await print_task
+                retention_stop_event.set()
+                await retention_task
+                await delivery_worker.aclose()
+                await preview_proxy.aclose()
+                await camera_client.close()
+        finally:
+            conn.close()
     finally:
-        print_stop_event.set()
-        if print_task is not None:
-            await print_task
-        retention_stop_event.set()
-        await retention_task
-        await delivery_worker.aclose()
-        await preview_proxy.aclose()
-        await camera_client.close()
         worker_process.terminate()
         try:
             worker_process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             worker_process.kill()
-        conn.close()
 
 
 CAPTURES_DIR.mkdir(parents=True, exist_ok=True)

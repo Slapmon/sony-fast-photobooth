@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from photobooth.camera.protocol import CameraDisconnectedError, CameraError
-from photobooth.config.event import EventConfig, load_event
+from photobooth.config.event import EventConfig, load_event, resolved_strings
 from photobooth.core.state import InvalidTransitionError
 from photobooth.printing.backend import PrinterBackend
 from photobooth.printing.queue import PrintLimitExceededError, PrintQueue
@@ -103,6 +103,7 @@ async def get_active_event(
     """
     event = _load_active_event(events_dir, active_event_id)
     background_image_url = "/session/event/background" if event.background_image else None
+    logo_image_url = "/session/event/logo" if event.logo_image else None
     modes = (
         [{"id": mode.id, "label": mode.label} for mode in event.modes]
         if event.modes
@@ -113,9 +114,24 @@ async def get_active_event(
         "title": event.title,
         "date": event.date,
         "background_image_url": background_image_url,
+        "logo_image_url": logo_image_url,
+        "theme": {"primary_color": event.theme.primary_color},
         "modes": modes,
+        "strings": resolved_strings(event),
         "idle_timeout_s": idle_timeout_s,
     }
+
+
+def _serve_active_event_image(
+    events_dir: Path, event: EventConfig, filename: str, missing_detail: str
+) -> FileResponse:
+    if not filename:
+        raise HTTPException(status_code=404, detail=missing_detail)
+    path = events_dir / event.id / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"{missing_detail} file not found")
+    media_type, _ = mimetypes.guess_type(str(path))
+    return FileResponse(path, media_type=media_type)
 
 
 @router.get("/session/event/background")
@@ -123,13 +139,17 @@ async def get_event_background(
     events_dir: EventsDirDep, active_event_id: ActiveEventIdDep
 ) -> FileResponse:
     event = _load_active_event(events_dir, active_event_id)
-    if not event.background_image:
-        raise HTTPException(status_code=404, detail="event has no background image")
-    path = events_dir / event.id / event.background_image
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="background image file not found")
-    media_type, _ = mimetypes.guess_type(str(path))
-    return FileResponse(path, media_type=media_type)
+    return _serve_active_event_image(
+        events_dir, event, event.background_image, "event has no background image"
+    )
+
+
+@router.get("/session/event/logo")
+async def get_event_logo(
+    events_dir: EventsDirDep, active_event_id: ActiveEventIdDep
+) -> FileResponse:
+    event = _load_active_event(events_dir, active_event_id)
+    return _serve_active_event_image(events_dir, event, event.logo_image, "event has no logo image")
 
 
 @router.post("/session/arm")

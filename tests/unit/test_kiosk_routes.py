@@ -20,6 +20,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from photobooth.camera.client import CameraWorkerClient
+from photobooth.config.event import DEFAULT_UI_STRINGS
 from photobooth.core.events import Event
 from photobooth.printing.backend import NullPrinter
 from photobooth.printing.queue import PrintQueue
@@ -133,9 +134,12 @@ def test_get_active_event_returns_public_info(http_client: TestClient) -> None:
         "title": "Test Event",
         "date": "2026-09-01",
         "background_image_url": "/session/event/background",
+        "logo_image_url": None,
+        "theme": {"primary_color": ""},
         # No `modes` configured in the fixture event.yaml -> one synthesized
         # default button, matching pre-mode-buttons single-template behaviour.
         "modes": [{"id": "default", "label": "Take Photo"}],
+        "strings": DEFAULT_UI_STRINGS,
         "idle_timeout_s": 42.0,
     }
 

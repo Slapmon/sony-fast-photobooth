@@ -111,6 +111,17 @@ class DeliveryConfig(BaseModel):
     local: LocalDeliveryConfig = LocalDeliveryConfig()
     sftp: SftpDeliveryConfig = SftpDeliveryConfig()
     s3: S3DeliveryConfig = S3DeliveryConfig()
+    # Overrides the host the share-link QR code (web/routers/share.py)
+    # points guests at. Blank (default): the QR uses whatever host/port the
+    # kiosk's own browser request came in on — fine for LAN-only testing,
+    # but means a guest's phone must join the venue Wi-Fi to open it. Once
+    # a real delivery target is configured (e.g. SFTP to a public server),
+    # set this to that server's public URL (e.g. "https://photos.example.com")
+    # so the QR sends guests straight there over their own mobile data —
+    # no booth Wi-Fi required. Purely a URL prefix for /s/{token}; it does
+    # not change where captures are actually uploaded (that's `backend`
+    # above) or require the target to run this app itself.
+    public_base_url: str = ""
 
 
 class StorageConfig(BaseModel):

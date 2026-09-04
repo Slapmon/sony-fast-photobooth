@@ -213,6 +213,86 @@ def test_update_event_rejects_mismatched_id(client: TestClient) -> None:
     assert response.status_code == 400
 
 
+def _fake_jpeg_bytes() -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), color="red").save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def test_upload_event_image_saves_file_and_updates_event_yaml(
+    client: TestClient, events_dir: Path
+) -> None:
+    _login(client)
+    response = client.post(
+        "/admin/events/test-event/upload-image",
+        data={"kind": "background"},
+        files={"file": ("bg.jpg", _fake_jpeg_bytes(), "image/jpeg")},
+    )
+    assert response.status_code == 200
+    assert response.json()["background_image"] == "background.jpg"
+    assert (events_dir / "test-event" / "background.jpg").is_file()
+
+    on_disk = yaml.safe_load((events_dir / "test-event" / "event.yaml").read_text())
+    assert on_disk["background_image"] == "background.jpg"
+
+
+def test_upload_event_image_logo_kind_sets_logo_field(
+    client: TestClient, events_dir: Path
+) -> None:
+    _login(client)
+    response = client.post(
+        "/admin/events/test-event/upload-image",
+        data={"kind": "logo"},
+        files={"file": ("logo.jpg", _fake_jpeg_bytes(), "image/jpeg")},
+    )
+    assert response.status_code == 200
+    assert response.json()["logo_image"] == "logo.jpg"
+    assert (events_dir / "test-event" / "logo.jpg").is_file()
+
+
+def test_upload_event_image_rejects_unsupported_extension(client: TestClient) -> None:
+    _login(client)
+    response = client.post(
+        "/admin/events/test-event/upload-image",
+        data={"kind": "background"},
+        files={"file": ("notes.txt", b"not an image", "text/plain")},
+    )
+    assert response.status_code == 400
+
+
+def test_upload_event_image_404s_for_unknown_event(client: TestClient) -> None:
+    _login(client)
+    response = client.post(
+        "/admin/events/does-not-exist/upload-image",
+        data={"kind": "background"},
+        files={"file": ("bg.jpg", _fake_jpeg_bytes(), "image/jpeg")},
+    )
+    assert response.status_code == 404
+
+
+def test_upload_event_image_replaces_old_file_with_different_extension(
+    client: TestClient, events_dir: Path
+) -> None:
+    _login(client)
+    client.post(
+        "/admin/events/test-event/upload-image",
+        data={"kind": "background"},
+        files={"file": ("bg.jpg", _fake_jpeg_bytes(), "image/jpeg")},
+    )
+    assert (events_dir / "test-event" / "background.jpg").is_file()
+
+    png_bytes = b"\x89PNG\r\n\x1a\nfake-png-body"
+    response = client.post(
+        "/admin/events/test-event/upload-image",
+        data={"kind": "background"},
+        files={"file": ("bg.png", png_bytes, "image/png")},
+    )
+    assert response.status_code == 200
+    assert response.json()["background_image"] == "background.png"
+    assert (events_dir / "test-event" / "background.png").is_file()
+    assert not (events_dir / "test-event" / "background.jpg").exists()
+
+
 def test_activate_event_mutates_app_state(client: TestClient, app: FastAPI) -> None:
     _login(client)
     response = client.post("/admin/events/test-event/activate")

@@ -20,6 +20,7 @@ from __future__ import annotations
 import contextlib
 import io
 import time
+import uuid
 from typing import TYPE_CHECKING, Literal
 
 from PIL import Image
@@ -139,7 +140,13 @@ class GphotoBackend(CameraBackend):
             while time.monotonic() < deadline:
                 event_type, event_data = camera.wait_for_event(_EVENT_POLL_MS)
                 if event_type == gp.GP_EVENT_FILE_ADDED:
-                    capture_id = f"{event_data.folder}/{event_data.name}"
+                    # A fresh, filesystem-safe id — callers (web/session.py,
+                    # admin's test-shot) use this directly as a JPEG
+                    # filename component, so it must never be (or contain)
+                    # the raw PTP folder path, which isn't flat-filename
+                    # safe. The real folder/name pair is still tracked in
+                    # self._pending for download_preview/download_full.
+                    capture_id = uuid.uuid4().hex
                     self._pending[capture_id] = event_data
                     return capture_id
                 if event_type == gp.GP_EVENT_CAPTURE_COMPLETE:

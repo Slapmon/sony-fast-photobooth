@@ -19,10 +19,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import yaml
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 
 from photobooth.camera.client import CameraWorkerClient
 from photobooth.camera.protocol import CameraDisconnectedError, CameraError
@@ -134,6 +134,55 @@ def activate_event(event_id: str, request: Request, settings: SettingsDep) -> di
     # restart).
     request.app.state.active_event_id = event_id
     return {"active_event_id": event_id}
+
+
+_MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # generous for a phone/camera photo, not unbounded
+_ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".webm", ".mov"}
+
+
+@router.post("/events/{event_id}/upload-image")
+async def upload_event_image(
+    event_id: str,
+    settings: SettingsDep,
+    kind: Annotated[Literal["background", "logo"], Form()],
+    file: Annotated[UploadFile, File()],
+) -> EventConfig:
+    """Uploads a background (image or video) or logo (image) for an event
+    and immediately points EventConfig.background_image/logo_image at it —
+    no separate Save step needed for the file itself, matching how
+    activate_event() above also takes effect immediately. Overwrites
+    whatever was previously set for this `kind` (old file removed if its
+    extension differs from the new one, so switching from .png to .jpg
+    doesn't leave an orphaned file behind).
+    """
+    event_dir = settings.events.base_dir / event_id
+    if not event_dir.is_dir():
+        raise HTTPException(status_code=404, detail="event not found")
+
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in _ALLOWED_IMAGE_EXTENSIONS:
+        allowed = sorted(_ALLOWED_IMAGE_EXTENSIONS)
+        raise HTTPException(
+            status_code=400, detail=f"unsupported file type {suffix!r} (allowed: {allowed})"
+        )
+
+    data = await file.read(_MAX_UPLOAD_BYTES + 1)
+    if len(data) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file too large")
+
+    event = load_event(settings.events.base_dir, event_id)
+    field = "background_image" if kind == "background" else "logo_image"
+    old_filename = getattr(event, field)
+    new_filename = f"{kind}{suffix}"
+
+    if old_filename and old_filename != new_filename:
+        with contextlib.suppress(OSError):
+            (event_dir / old_filename).unlink()
+
+    (event_dir / new_filename).write_bytes(data)
+    updated = event.model_copy(update={field: new_filename})
+    (event_dir / "event.yaml").write_text(yaml.safe_dump(updated.model_dump(), sort_keys=False))
+    return updated
 
 
 # ---------------------------------------------------------------------------

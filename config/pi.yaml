@@ -28,6 +28,12 @@ delivery:
   sftp:
     host: ""
     remote_path: ""
+  # Once SFTP delivers to a real, internet-reachable server, set this to
+  # that server's public URL — the review screen's QR code then sends
+  # guests straight there over their own mobile data instead of requiring
+  # them to join the booth's Wi-Fi. Leave blank to keep using the booth's
+  # own LAN address (fine for testing, requires guest Wi-Fi for real use).
+  public_base_url: ""
 
 storage:
   sqlite_path: /var/lib/photobooth/photobooth.db

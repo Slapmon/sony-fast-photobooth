@@ -91,24 +91,26 @@
   <section class="checking">Checking session…</section>
 {:else if !authenticated}
   <section class="login">
-    <h1>Admin</h1>
-    <p>Enter the PIN to continue.</p>
-    <input
-      type="password"
-      inputmode="numeric"
-      autocomplete="off"
-      bind:value={pin}
-      onkeydown={onKeydown}
-      disabled={submitting}
-      placeholder="PIN"
-      aria-label="Admin PIN"
-    />
-    <button onclick={login} disabled={submitting || !pin}>
-      {submitting ? 'Checking…' : 'Log in'}
-    </button>
-    {#if error}
-      <p class="error">{error}</p>
-    {/if}
+    <div class="login-card">
+      <h1>Admin</h1>
+      <p>Enter the PIN to continue.</p>
+      <input
+        type="password"
+        inputmode="numeric"
+        autocomplete="off"
+        bind:value={pin}
+        onkeydown={onKeydown}
+        disabled={submitting}
+        placeholder="PIN"
+        aria-label="Admin PIN"
+      />
+      <button onclick={login} disabled={submitting || !pin}>
+        {submitting ? 'Checking…' : 'Log in'}
+      </button>
+      {#if error}
+        <p class="error">{error}</p>
+      {/if}
+    </div>
   </section>
 {:else}
   <section class="shell">
@@ -168,13 +170,29 @@
     gap: 0.75rem;
   }
 
+  .login-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 2.5rem 3rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface);
+    box-shadow: var(--shadow-sm);
+  }
+
   .login h1 {
     margin: 0;
+    font-family: var(--font-display);
+    font-weight: 400;
+    letter-spacing: -0.01em;
   }
 
   .login p {
     color: var(--color-ink-muted);
     margin: 0 0 0.5rem;
+    font-size: 0.9rem;
   }
 
   .login input {
@@ -183,22 +201,35 @@
     padding: 0.6rem 1rem;
     text-align: center;
     width: 10rem;
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-sm);
     background: var(--color-surface);
+    transition: border-color 200ms var(--ease-spring);
+  }
+
+  .login input:focus-visible {
+    border-color: var(--color-primary);
   }
 
   .login button {
-    font-size: 1.1rem;
+    font-size: 1rem;
+    font-weight: 500;
     padding: 0.6rem 1.75rem;
     border: none;
     border-radius: var(--radius-sm);
     background: var(--color-primary);
     color: var(--color-primary-contrast);
+    transition:
+      background-color 200ms var(--ease-spring),
+      transform 150ms var(--ease-spring);
   }
 
   .login button:hover:not(:disabled) {
     background: var(--color-primary-hover);
+  }
+
+  .login button:active:not(:disabled) {
+    transform: scale(0.97);
   }
 
   .login button:disabled {
@@ -226,41 +257,52 @@
 
   .shell header button {
     padding: 0.4rem 1rem;
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-sm);
     background: var(--color-surface);
     color: var(--color-ink);
+    transition:
+      background-color 200ms var(--ease-spring),
+      transform 150ms var(--ease-spring);
   }
 
   .shell header button:hover {
     background: var(--color-surface-alt);
   }
 
+  .shell header button:active {
+    transform: scale(0.97);
+  }
+
   .tabs {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.5rem;
+    gap: 0.4rem;
     border-bottom: 1px solid var(--color-border);
     padding-bottom: 0.75rem;
-    margin-bottom: 1.25rem;
+    margin-bottom: 1.5rem;
   }
 
   .tabs button {
-    padding: 0.5rem 1.1rem;
-    border: 1px solid var(--color-border);
-    border-radius: 999px;
-    background: var(--color-surface);
-    color: var(--color-ink);
-    font-size: 0.95rem;
+    padding: 0.45rem 1.1rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--color-ink-muted);
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition:
+      background-color 200ms var(--ease-spring),
+      color 200ms var(--ease-spring);
   }
 
   .tabs button:hover:not(.active) {
     background: var(--color-surface-alt);
+    color: var(--color-ink);
   }
 
   .tabs button.active {
     background: var(--color-primary);
-    border-color: var(--color-primary);
     color: var(--color-primary-contrast);
   }
 
