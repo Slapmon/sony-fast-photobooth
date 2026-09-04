@@ -109,6 +109,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Read by admin_auth's require_admin dependency (T-3.7) to check PINs
     # and sign/verify session tokens.
     app.state.settings = settings
+    # Read by admin.py's activate_event() to persist the activated event
+    # back to disk, so it survives an app restart (see that route's
+    # docstring — SessionManager's own active-event reference is frozen at
+    # construction time below, only re-read from this file on next boot).
+    app.state.config_path = config_path
 
     # Blocking Popen is intentional here: this runs once at startup, before
     # the event loop is serving any requests, and _wait_for_worker right

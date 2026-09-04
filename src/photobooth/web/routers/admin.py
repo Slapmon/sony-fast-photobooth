@@ -18,13 +18,25 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import re
 import shutil
+import signal
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from pydantic import BaseModel
 
 from photobooth.camera.client import CameraWorkerClient
@@ -137,10 +149,24 @@ def activate_event(event_id: str, request: Request, settings: SettingsDep) -> di
         load_event(settings.events.base_dir, event_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="event not found") from exc
-    # Mutates the live app.state attribute directly (see this task's report
-    # for exactly which downstream readers do/don't pick this up without a
-    # restart).
+
+    # Mutates the live app.state attribute directly — GET /session/event,
+    # the gallery routes, and the admin panel itself pick this up
+    # immediately, no restart needed for those.
     request.app.state.active_event_id = event_id
+
+    # SessionManager's own active-event reference (used for the actual
+    # guest capture flow — which template/vars a shot renders with) is set
+    # once at construction time from Settings.events.active_event_id and
+    # does NOT re-read app.state — see web/app.py's lifespan. Persisting
+    # the activation back to the config file on disk means a restart (see
+    # POST /actions/restart-app below) picks it up rather than silently
+    # reverting to whatever was last saved in the file.
+    config_path: Path = request.app.state.config_path
+    config_data = yaml.safe_load(config_path.read_text())
+    config_data.setdefault("events", {})["active_event_id"] = event_id
+    config_path.write_text(yaml.safe_dump(config_data, sort_keys=False))
+
     return {"active_event_id": event_id}
 
 
@@ -403,6 +429,45 @@ async def reconnect_camera(camera_client: CameraClientDep) -> dict[str, bool]:
         await camera_client.reconnect()
     except (CameraError, CameraDisconnectedError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@router.post("/actions/reset-session")
+async def reset_session(session_manager: SessionManagerDep) -> dict[str, bool]:
+    """Lightweight recovery action for a frozen/stuck guest session (e.g. a
+    guest navigated away mid-REVIEW and the state machine is stranded off
+    IDLE) — resets to IDLE WITHOUT touching the camera connection, unlike
+    the heavier `shutdown_camera` below. Safe to call when already idle.
+    Does NOT restart the app process or reload config — see
+    `restart_app` below for that.
+    """
+    with contextlib.suppress(InvalidTransitionError):
+        await session_manager.dismiss()
+    return {"ok": True}
+
+
+def _delayed_sigterm() -> None:
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
+@router.post("/actions/restart-app")
+async def restart_app(background_tasks: BackgroundTasks) -> dict[str, bool]:
+    """Restarts the whole app process — for changes that only take effect at
+    startup, e.g. a newly created/activated event actually being picked up
+    by the guest capture flow (SessionManager's active-event reference is
+    frozen at construction time; see activate_event()'s docstring above).
+
+    Sends SIGTERM to this process as a FastAPI background task, so it fires
+    only AFTER the HTTP response is flushed to the operator's browser. That
+    triggers the same graceful lifespan shutdown as `systemctl stop`
+    (camera worker subprocess and DB connection closed cleanly). Relies on
+    the deploy systemd unit's `Restart=always`
+    (deploy/systemd/photobooth.service) to bring the process back up with
+    freshly loaded config. In an environment with no process supervisor
+    (e.g. bare `uvicorn` in local dev) this stops the app and does NOT
+    bring it back — don't wire this into dev tooling without one.
+    """
+    background_tasks.add_task(_delayed_sigterm)
     return {"ok": True}
 
 

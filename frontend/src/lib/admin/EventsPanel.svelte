@@ -19,11 +19,11 @@
 
   IMPORTANT UX caveat surfaced directly in this panel (see this task's report
   for the full explanation): activating an event here updates the attract
-  loop and template-preview's "active event" immediately, but an
-  already-armed/in-progress guest session was constructed against whatever
-  event was active at app startup and will NOT pick up the switch until the
-  app restarts. This is flagged inline so an operator isn't surprised
-  mid-event.
+  loop and template-preview's "active event" immediately AND persists it to
+  the config file on disk, but the actual guest capture flow's own
+  active-event reference is still frozen at app-startup time — it does NOT
+  pick up the switch until the app restarts (Actions tab -> Restart app).
+  This is flagged inline so an operator isn't surprised mid-event.
 -->
 <script lang="ts">
   import EventWizard from './EventWizard.svelte'
@@ -245,8 +245,9 @@
 <section class="events-panel">
   <p class="note">
     Activating an event here takes effect immediately for the attract loop and template preview.
-    It does <strong>not</strong> retroactively affect an already-running app process's guest
-    capture flow — that only picks up the new event on the next app restart.
+    It does <strong>not</strong> retroactively affect the running app process's actual guest
+    capture flow — use the Actions tab's <strong>Restart app</strong> button after activating a
+    new event to make sure captures use it too.
   </p>
 
   <div class="toolbar">

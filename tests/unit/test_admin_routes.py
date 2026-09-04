@@ -15,6 +15,8 @@ via Settings.
 from __future__ import annotations
 
 import io
+import os
+import signal
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -99,11 +101,39 @@ def session_manager(
 
 
 @pytest.fixture
+def config_path(tmp_path: Path, events_dir: Path, settings: Settings) -> Path:
+    # Minimal on-disk config mirroring `settings` — activate_event() reads
+    # and rewrites this file's `events.active_event_id` to persist an
+    # activation across a restart.
+    path = tmp_path / "test-config.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "profile": "dev",
+                "camera": {"backend": "mock"},
+                "preview": {"stream_url": "http://127.0.0.1:1/does-not-exist"},
+                "printing": {},
+                "delivery": {},
+                "storage": {"sqlite_path": str(settings.storage.sqlite_path)},
+                "web": {},
+                "events": {"base_dir": str(events_dir), "active_event_id": "test-event"},
+                "admin": {"pin": _PIN, "secret_key": _SECRET},
+            }
+        )
+    )
+    return path
+
+
+@pytest.fixture
 def app(
-    settings: Settings, session_manager: SessionManager, db_conn: sqlite3.Connection
+    settings: Settings,
+    session_manager: SessionManager,
+    db_conn: sqlite3.Connection,
+    config_path: Path,
 ) -> FastAPI:
     fastapi_app = FastAPI()
     fastapi_app.state.settings = settings
+    fastapi_app.state.config_path = config_path
     fastapi_app.state.camera_client = session_manager.camera
     fastapi_app.state.session_manager = session_manager
     fastapi_app.state.active_event_id = "test-event"
@@ -422,6 +452,41 @@ def test_activate_event_mutates_app_state(client: TestClient, app: FastAPI) -> N
     assert app.state.active_event_id == "test-event"
 
 
+def test_activate_event_persists_active_event_id_to_disk(
+    client: TestClient, config_path: Path, events_dir: Path
+) -> None:
+    # Seed a second event so activating it actually changes the value.
+    other_dir = events_dir / "other-event"
+    other_dir.mkdir()
+    (other_dir / "event.yaml").write_text(
+        yaml.safe_dump({"id": "other-event", "title": "Other", "template": "single.yaml"})
+    )
+    _login(client)
+
+    response = client.post("/admin/events/other-event/activate")
+    assert response.status_code == 200
+
+    on_disk = yaml.safe_load(config_path.read_text())
+    assert on_disk["events"]["active_event_id"] == "other-event"
+    # Every other top-level key survives the round trip untouched.
+    assert on_disk["admin"]["pin"] == _PIN
+
+
+def test_restart_app_returns_ok_and_sends_sigterm(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _login(client)
+    sent: list[tuple[int, int]] = []
+    monkeypatch.setattr("os.kill", lambda pid, sig: sent.append((pid, sig)))
+
+    response = client.post("/admin/actions/restart-app")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    # BackgroundTasks run after the response is sent but before the test
+    # client hands control back — by the time .post() returns, it's fired.
+    assert sent == [(os.getpid(), signal.SIGTERM)]
+
+
 def test_activate_unknown_event_404s_and_does_not_mutate_state(
     client: TestClient, app: FastAPI
 ) -> None:
@@ -519,6 +584,28 @@ def test_test_shot_returns_captured_image_info(
     body = response.json()
     assert body["capture_id"]
     assert body["image_url"].startswith("/captures/admin-test-")
+
+
+def test_reset_session_action_returns_to_idle_without_touching_camera(
+    client: TestClient, session_manager: SessionManager
+) -> None:
+    assert client.portal is not None
+    client.portal.call(session_manager.camera.connect)
+    _login(client)
+
+    response = client.post("/admin/actions/reset-session")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+    status = client.portal.call(session_manager.camera.get_status)
+    assert status["connected"] is True
+
+
+def test_reset_session_action_is_a_noop_when_already_idle(client: TestClient) -> None:
+    _login(client)
+    response = client.post("/admin/actions/reset-session")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
 
 
 def test_reconnect_camera_action(client: TestClient, session_manager: SessionManager) -> None:

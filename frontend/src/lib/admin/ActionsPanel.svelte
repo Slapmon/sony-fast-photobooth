@@ -10,6 +10,13 @@
   let reconnectBusy = $state(false)
   let reconnectResult = $state<string | null>(null)
 
+  let resetBusy = $state(false)
+  let resetResult = $state<string | null>(null)
+
+  let restartBusy = $state(false)
+  let restartResult = $state<string | null>(null)
+  let restartConfirming = $state(false)
+
   let shutdownBusy = $state(false)
   let shutdownResult = $state<string | null>(null)
 
@@ -49,6 +56,41 @@
       reconnectResult = `Failed: ${err instanceof Error ? err.message : String(err)}`
     } finally {
       reconnectBusy = false
+    }
+  }
+
+  async function runReset() {
+    resetBusy = true
+    resetResult = null
+    try {
+      const res = await fetch('/admin/actions/reset-session', { method: 'POST' })
+      const body = await res.json()
+      if (!res.ok) throw new Error(body?.detail ?? `HTTP ${res.status}`)
+      resetResult = 'Session reset — booth returned to the attract screen.'
+    } catch (err) {
+      resetResult = `Failed: ${err instanceof Error ? err.message : String(err)}`
+    } finally {
+      resetBusy = false
+    }
+  }
+
+  async function runRestart() {
+    if (!restartConfirming) {
+      restartConfirming = true
+      return
+    }
+    restartConfirming = false
+    restartBusy = true
+    restartResult = null
+    try {
+      const res = await fetch('/admin/actions/restart-app', { method: 'POST' })
+      const body = await res.json()
+      if (!res.ok) throw new Error(body?.detail ?? `HTTP ${res.status}`)
+      restartResult = 'Restarting… the app will be back in a few seconds.'
+    } catch (err) {
+      restartResult = `Failed: ${err instanceof Error ? err.message : String(err)}`
+    } finally {
+      restartBusy = false
     }
   }
 
@@ -109,6 +151,34 @@
       {reconnectBusy ? 'Reconnecting…' : 'Reconnect camera'}
     </button>
     {#if reconnectResult}<p class="result">{reconnectResult}</p>{/if}
+  </div>
+
+  <div class="action card">
+    <button class="secondary" onclick={runReset} disabled={resetBusy}>
+      {resetBusy ? 'Resetting…' : 'Reset stuck session'}
+    </button>
+    <p class="hint">
+      Returns a frozen or stuck guest session to the attract screen without touching the camera
+      connection or restarting the app. Use this first if a guest reports the booth won't start a
+      new photo.
+    </p>
+    {#if resetResult}<p class="result">{resetResult}</p>{/if}
+  </div>
+
+  <div class="action card">
+    <button class="primary" onclick={runRestart} disabled={restartBusy}>
+      {restartBusy
+        ? 'Restarting…'
+        : restartConfirming
+          ? 'Click again to confirm restart'
+          : 'Restart app'}
+    </button>
+    <p class="hint">
+      Restarts the whole app process — needed after creating or activating a new event so the
+      actual guest capture flow (not just the attract screen) picks it up. Takes a few seconds;
+      the booth is briefly unavailable during the restart.
+    </p>
+    {#if restartResult}<p class="result">{restartResult}</p>{/if}
   </div>
 
   <div class="action card">
