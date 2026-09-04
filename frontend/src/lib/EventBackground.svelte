@@ -63,7 +63,11 @@
   .scrim {
     position: absolute;
     inset: 0;
-    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.25) 0%, rgba(0, 0, 0, 0.6) 100%);
+    background: linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--color-scrim) 25%, transparent) 0%,
+      color-mix(in srgb, var(--color-scrim) 60%, transparent) 100%
+    );
   }
 
   .logo {

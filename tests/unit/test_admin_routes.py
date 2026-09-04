@@ -213,6 +213,127 @@ def test_update_event_rejects_mismatched_id(client: TestClient) -> None:
     assert response.status_code == 400
 
 
+# ---------------------------------------------------------------------------
+# Event tool: templates, create, duplicate, delete
+# ---------------------------------------------------------------------------
+
+
+def test_list_event_templates_returns_three_presets(client: TestClient) -> None:
+    _login(client)
+    response = client.get("/admin/event-templates")
+    assert response.status_code == 200
+    body = response.json()
+    ids = {preset["id"] for preset in body}
+    assert ids == {"wedding", "birthday", "corporate"}
+
+
+def test_create_event_from_preset_seeds_theme_and_modes(
+    client: TestClient, events_dir: Path
+) -> None:
+    _login(client)
+    response = client.post(
+        "/admin/events",
+        json={
+            "id": "new-wedding",
+            "title": "New Wedding",
+            "date": "2027-01-01",
+            "based_on": "wedding",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["theme"]["primary_color"] == "#C98A93"
+    assert body["theme"]["scrim_color"] == "#241A1C"
+    assert len(body["modes"]) == 2
+    assert (events_dir / "new-wedding" / "event.yaml").is_file()
+
+
+def test_create_event_from_scratch_uses_schema_defaults(client: TestClient) -> None:
+    _login(client)
+    response = client.post(
+        "/admin/events", json={"id": "blank-event", "title": "Blank", "date": "", "based_on": None}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["theme"]["primary_color"] == ""
+    assert body["modes"] == []
+
+
+def test_create_event_rejects_invalid_slug(client: TestClient) -> None:
+    _login(client)
+    response = client.post(
+        "/admin/events", json={"id": "Not A Slug!", "title": "x", "date": "", "based_on": None}
+    )
+    assert response.status_code == 400
+
+
+def test_create_event_409s_on_existing_id(client: TestClient) -> None:
+    _login(client)
+    response = client.post(
+        "/admin/events", json={"id": "test-event", "title": "x", "date": "", "based_on": None}
+    )
+    assert response.status_code == 409
+
+
+def test_duplicate_event_copies_files_and_rewrites_id_and_title(
+    client: TestClient, events_dir: Path
+) -> None:
+    _login(client)
+    client.post(
+        "/admin/events/test-event/upload-image",
+        data={"kind": "background"},
+        files={"file": ("bg.jpg", _fake_jpeg_bytes(), "image/jpeg")},
+    )
+    response = client.post(
+        "/admin/events/test-event/duplicate",
+        json={"new_id": "test-event-copy", "new_title": "Test Event Copy"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == "test-event-copy"
+    assert body["title"] == "Test Event Copy"
+    assert body["vars"] == {"couple": "A & B"}
+    assert (events_dir / "test-event-copy" / "background.jpg").is_file()
+
+
+def test_duplicate_event_404s_for_unknown_source(client: TestClient) -> None:
+    _login(client)
+    response = client.post(
+        "/admin/events/does-not-exist/duplicate", json={"new_id": "x", "new_title": "x"}
+    )
+    assert response.status_code == 404
+
+
+def test_duplicate_event_409s_on_existing_new_id(client: TestClient) -> None:
+    _login(client)
+    response = client.post(
+        "/admin/events/test-event/duplicate", json={"new_id": "test-event", "new_title": "x"}
+    )
+    assert response.status_code == 409
+
+
+def test_delete_event_removes_directory(client: TestClient, events_dir: Path) -> None:
+    _login(client)
+    client.post(
+        "/admin/events", json={"id": "throwaway", "title": "x", "date": "", "based_on": None}
+    )
+    response = client.delete("/admin/events/throwaway")
+    assert response.status_code == 200
+    assert not (events_dir / "throwaway").exists()
+
+
+def test_delete_event_404s_for_unknown_event(client: TestClient) -> None:
+    _login(client)
+    response = client.delete("/admin/events/does-not-exist")
+    assert response.status_code == 404
+
+
+def test_delete_event_409s_for_active_event(client: TestClient) -> None:
+    _login(client)
+    response = client.delete("/admin/events/test-event")
+    assert response.status_code == 409
+
+
 def _fake_jpeg_bytes() -> bytes:
     buf = io.BytesIO()
     Image.new("RGB", (4, 4), color="red").save(buf, format="JPEG")

@@ -32,12 +32,21 @@ class CaptureMode(BaseModel):
 
 
 class EventTheme(BaseModel):
-    """Per-event color override. Empty `primary_color` means "use the app's
-    default palette" (frontend/src/app.css's --color-primary) — this is the
-    one thing an event customizes today; extend here if more knobs are
-    ever needed rather than growing EventConfig directly."""
+    """Per-event color override, layered onto the app's fixed dark
+    "darkroom" base (frontend/src/app.css). Empty fields mean "use the
+    app's own default" for that token — an event only needs to set what it
+    wants to change.
 
-    primary_color: str = ""
+    Deliberately NOT a full light/dark re-theme: every guest-facing screen
+    (attract loop, countdown/review, gallery) sits over a live camera feed
+    or an uploaded photo of unknown brightness, so it's built on a dark,
+    always-legible scrim. Varying `scrim_color`'s HUE (not lightness) lets
+    each event feel genuinely different while guaranteeing text stays
+    readable regardless of the background image.
+    """
+
+    primary_color: str = ""  # accent — buttons, active states
+    scrim_color: str = ""  # tinted dark backdrop behind every guest screen
 
 
 class EventConfig(BaseModel):

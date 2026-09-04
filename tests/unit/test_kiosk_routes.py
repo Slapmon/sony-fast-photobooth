@@ -125,6 +125,46 @@ def test_capture_before_arm_returns_409(http_client: TestClient) -> None:
     assert response.status_code == 409
 
 
+def test_arm_after_review_without_dismiss_returns_409(
+    http_client: TestClient, session_manager: SessionManager
+) -> None:
+    """Regression for "after I visit the gallery I can not start the new
+    capture process": REVIEW only allows -> {PROCESSING, IDLE}, so a client
+    that arms a new session straight out of REVIEW (skipping /session/dismiss
+    — e.g. Kiosk.svelte's old handleGallery, which navigated to /gallery/...
+    without dismissing first) must get a 409, not a silently stuck session.
+    """
+    assert http_client.portal is not None
+    http_client.portal.call(session_manager.camera.connect)
+
+    http_client.post("/session/arm")
+    http_client.post("/session/capture")
+
+    response = http_client.post("/session/arm")
+    assert response.status_code == 409
+
+
+def test_arm_after_dismiss_from_review_succeeds(
+    http_client: TestClient, session_manager: SessionManager
+) -> None:
+    """The correct recovery from REVIEW: dismiss() back to IDLE, then arm()
+    works again — this is what Kiosk.svelte's handleGallery must now do
+    before navigating away, mirroring handleStart's existing review guard.
+    """
+    assert http_client.portal is not None
+    http_client.portal.call(session_manager.camera.connect)
+
+    http_client.post("/session/arm")
+    http_client.post("/session/capture")
+
+    dismiss_response = http_client.post("/session/dismiss")
+    assert dismiss_response.status_code == 200
+
+    arm_response = http_client.post("/session/arm")
+    assert arm_response.status_code == 200
+    assert arm_response.json()["state"] == "armed"
+
+
 def test_get_active_event_returns_public_info(http_client: TestClient) -> None:
     response = http_client.get("/session/event")
     assert response.status_code == 200

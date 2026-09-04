@@ -59,7 +59,11 @@
     justify-content: center;
     gap: 1rem;
     padding: 1.5rem 2rem calc(1.5rem + env(safe-area-inset-bottom, 0px));
-    background: linear-gradient(to top, rgba(0, 0, 0, 0.6) 0%, rgba(0, 0, 0, 0) 100%);
+    background: linear-gradient(
+      to top,
+      color-mix(in srgb, var(--color-scrim) 60%, transparent) 0%,
+      transparent 100%
+    );
   }
 
   .mode-btn,

@@ -214,9 +214,20 @@
     void startSession(modeId)
   }
 
-  function handleGallery() {
+  // Mirrors handleStart's own review-guard above: leaving for the gallery is
+  // a full page navigation (no unmount cleanup runs the WS through
+  // /session/dismiss), so a session sitting in REVIEW would otherwise stay
+  // stranded there server-side — REVIEW only allows -> {PROCESSING,IDLE},
+  // never straight back to ARMED — and the guest's next arm() 409s the
+  // moment they return via a gallery mode button (bug: "after visiting the
+  // gallery I can not start the new capture process").
+  async function handleGallery() {
     const eventId = eventInfo?.event_id
-    if (eventId) window.location.href = `/gallery/${encodeURIComponent(eventId)}`
+    if (!eventId) return
+    if (sessionState === 'review') {
+      await dismiss()
+    }
+    window.location.href = `/gallery/${encodeURIComponent(eventId)}`
   }
 
   // T-3.3: from any screen other than the attract loop itself, no
@@ -468,8 +479,8 @@
   }
 
   .qr-corner img {
-    width: 9.5rem;
-    height: 9.5rem;
+    width: 12rem;
+    height: 12rem;
   }
 
   .qr-corner span {

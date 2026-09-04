@@ -12,7 +12,7 @@ slots:
 overlays:
   - { type: image, src: "assets/frame.png", x: 0, y: 0, w: 1795, h: 1205 }
   - type: text
-    content: "{event.couple} · {event.date}"
+    content: "{event.title} · {event.date}"
     # PLACEHOLDER — see collage-2x2.yaml's identical note; not a real font.
     font: "assets/PLACEHOLDER_FONT.ttf"
     size: 64

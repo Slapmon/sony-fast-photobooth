@@ -1,5 +1,6 @@
 <!--
-  Event switching + config editor (IMPLEMENTATION_PLAN.md T-3.8).
+  Event switching + config editor (IMPLEMENTATION_PLAN.md T-3.8) + the
+  create/duplicate/delete event tool (see the approved event-tool plan).
 
   Lists events from GET /admin/events, lets the operator pick one to view/edit
   via GET+PUT /admin/events/{id}, and activate it via
@@ -7,7 +8,14 @@
   POST /admin/events/{id}/upload-image (multipart) — that endpoint saves the
   file AND updates the event's background_image/logo_image field immediately,
   no separate Save step for the image itself (Save still applies to every
-  other field below, including the theme color).
+  other field below, including the theme colors).
+
+  "New Event" opens EventWizard (template presets + guided setup). Duplicate
+  and Delete are per-row actions; Delete is blocked (409 from the backend)
+  for the currently active event — active_event_id is read from the
+  existing public GET /session/event (there's no admin-scoped equivalent),
+  best-effort only: if that fetch fails, Delete just stays enabled for every
+  row rather than blocking the whole panel.
 
   IMPORTANT UX caveat surfaced directly in this panel (see this task's report
   for the full explanation): activating an event here updates the attract
@@ -18,6 +26,11 @@
   mid-event.
 -->
 <script lang="ts">
+  import EventWizard from './EventWizard.svelte'
+  import ModesEditor from './ModesEditor.svelte'
+  import VarsEditor from './VarsEditor.svelte'
+  import StringsEditor from './StringsEditor.svelte'
+
   interface EventSummary {
     id: string
     title?: string
@@ -35,6 +48,7 @@
 
   interface EventTheme {
     primary_color: string
+    scrim_color: string
   }
 
   interface EventConfig {
@@ -54,19 +68,23 @@
   let events = $state<EventSummary[]>([])
   let loading = $state(true)
   let loadError = $state<string | null>(null)
+  let activeEventId = $state<string | null>(null)
 
   let selectedId = $state<string | null>(null)
   let editing = $state<EventConfig | null>(null)
-  let editingVarsText = $state('')
-  let editingModesText = $state('')
-  let editingStringsText = $state('')
   let editError = $state<string | null>(null)
   let saveStatus = $state<string | null>(null)
   let activateStatus = $state<string | null>(null)
+  let rowActionError = $state<string | null>(null)
 
   let uploadingBackground = $state(false)
   let uploadingLogo = $state(false)
   let uploadError = $state<string | null>(null)
+
+  let showWizard = $state(false)
+  let duplicatingId = $state<string | null>(null)
+  let duplicateNewId = $state('')
+  let duplicateNewTitle = $state('')
 
   async function loadEvents() {
     loading = true
@@ -75,6 +93,17 @@
       const res = await fetch('/admin/events')
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       events = await res.json()
+      try {
+        const activeRes = await fetch('/session/event')
+        if (activeRes.ok) {
+          const active = await activeRes.json()
+          activeEventId = active.event_id ?? null
+        }
+      } catch {
+        // best-effort only — active-event indication (disabling Delete on
+        // it) is a nice-to-have here, not load-bearing for the rest of the
+        // panel
+      }
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err)
     } finally {
@@ -92,10 +121,8 @@
       const res = await fetch(`/admin/events/${encodeURIComponent(id)}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const config: EventConfig = await res.json()
+      if (!config.theme) config.theme = { primary_color: '', scrim_color: '' }
       editing = config
-      editingVarsText = JSON.stringify(config.vars ?? {}, null, 2)
-      editingModesText = JSON.stringify(config.modes ?? [], null, 2)
-      editingStringsText = JSON.stringify(config.strings ?? {}, null, 2)
     } catch (err) {
       editError = err instanceof Error ? err.message : String(err)
     }
@@ -105,36 +132,11 @@
     if (!editing) return
     saveStatus = 'Saving…'
     editError = null
-    let vars: Record<string, string>
-    try {
-      vars = JSON.parse(editingVarsText || '{}')
-    } catch {
-      editError = 'vars must be valid JSON (an object of string keys/values)'
-      saveStatus = null
-      return
-    }
-    let modes: CaptureMode[]
-    try {
-      modes = JSON.parse(editingModesText || '[]')
-    } catch {
-      editError = 'modes must be valid JSON (an array of {id, label, template})'
-      saveStatus = null
-      return
-    }
-    let strings: Record<string, string>
-    try {
-      strings = JSON.parse(editingStringsText || '{}')
-    } catch {
-      editError = 'strings must be valid JSON (an object of string keys/values)'
-      saveStatus = null
-      return
-    }
-    const body = { ...editing, vars, modes, strings }
     try {
       const res = await fetch(`/admin/events/${encodeURIComponent(editing.id)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify(editing),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       editing = await res.json()
@@ -153,6 +155,7 @@
         method: 'POST',
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      activeEventId = id
       activateStatus = `Activated "${id}". Note: an in-progress guest session won't see this until the app restarts (see panel note above).`
     } catch (err) {
       activateStatus = `Failed: ${err instanceof Error ? err.message : String(err)}`
@@ -186,6 +189,56 @@
     }
   }
 
+  function onWizardCreated(id: string) {
+    showWizard = false
+    loadEvents()
+    selectEvent(id)
+  }
+
+  function startDuplicate(ev: EventSummary) {
+    duplicatingId = ev.id
+    duplicateNewId = `${ev.id}-copy`
+    duplicateNewTitle = ev.title ? `${ev.title} (copy)` : ''
+    rowActionError = null
+  }
+
+  async function confirmDuplicate() {
+    if (!duplicatingId) return
+    try {
+      const res = await fetch(`/admin/events/${encodeURIComponent(duplicatingId)}/duplicate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ new_id: duplicateNewId, new_title: duplicateNewTitle }),
+      })
+      const body = await res.json()
+      if (!res.ok) throw new Error(body?.detail ?? `HTTP ${res.status}`)
+      duplicatingId = null
+      await loadEvents()
+      await selectEvent(body.id)
+    } catch (err) {
+      rowActionError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  async function deleteEvent(id: string) {
+    if (!confirm(`Delete event "${id}"? This cannot be undone.`)) return
+    rowActionError = null
+    try {
+      const res = await fetch(`/admin/events/${encodeURIComponent(id)}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body?.detail ?? `HTTP ${res.status}`)
+      }
+      if (selectedId === id) {
+        selectedId = null
+        editing = null
+      }
+      await loadEvents()
+    } catch (err) {
+      rowActionError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
   loadEvents()
 </script>
 
@@ -195,6 +248,12 @@
     It does <strong>not</strong> retroactively affect an already-running app process's guest
     capture flow — that only picks up the new event on the next app restart.
   </p>
+
+  <div class="toolbar">
+    <button type="button" class="new-event" onclick={() => (showWizard = true)}>+ New Event</button>
+  </div>
+
+  {#if rowActionError}<p class="error">{rowActionError}</p>{/if}
 
   {#if loading}
     <p>Loading events…</p>
@@ -215,7 +274,30 @@
             {/if}
           </button>
           <button class="activate" onclick={() => activateEvent(ev.id)}>Activate</button>
+          <button class="secondary" onclick={() => startDuplicate(ev)}>Duplicate</button>
+          <button
+            class="secondary danger"
+            disabled={ev.id === activeEventId}
+            title={ev.id === activeEventId ? 'Cannot delete the active event' : ''}
+            onclick={() => deleteEvent(ev.id)}
+          >
+            Delete
+          </button>
         </li>
+        {#if duplicatingId === ev.id}
+          <li class="duplicate-form">
+            <label>
+              New id
+              <input type="text" bind:value={duplicateNewId} />
+            </label>
+            <label>
+              New title
+              <input type="text" bind:value={duplicateNewTitle} />
+            </label>
+            <button type="button" class="activate" onclick={confirmDuplicate}>Create copy</button>
+            <button type="button" class="secondary" onclick={() => (duplicatingId = null)}>Cancel</button>
+          </li>
+        {/if}
       {/each}
     </ul>
   {/if}
@@ -235,17 +317,11 @@
         Date
         <input type="text" bind:value={editing.date} />
       </label>
-      <label>
-        Template (legacy fallback — used only if no modes are listed below)
-        <input type="text" bind:value={editing.template} />
-      </label>
-      <label>
-        Guest-facing capture modes (JSON array of {'{id, label, template}'} — each becomes a
-        button at the bottom of the attract/review/gallery screens, e.g. <code
-          >[&#123;"id":"single","label":"Single Photo","template":"single.yaml"&#125;]</code
-        >)
-        <textarea rows="5" bind:value={editingModesText}></textarea>
-      </label>
+
+      <fieldset>
+        <legend>Capture modes</legend>
+        <ModesEditor bind:modes={editing.modes} />
+      </fieldset>
 
       <div class="image-field">
         <span class="image-label">Background image or video</span>
@@ -294,31 +370,47 @@
       </label>
 
       <label>
-        Background image (relative path — set automatically by the upload above)
-        <input type="text" bind:value={editing.background_image} />
+        Backdrop color (tinted dark scrim behind every guest screen — leave blank for the app
+        default)
+        <div class="color-row">
+          <input
+            type="color"
+            value={editing.theme.scrim_color || '#0f0c09'}
+            oninput={(e) => (editing!.theme.scrim_color = e.currentTarget.value)}
+          />
+          <input
+            type="text"
+            placeholder="#0f0c09 (blank = default)"
+            bind:value={editing.theme.scrim_color}
+          />
+        </div>
       </label>
+
       <label class="checkbox">
         <input type="checkbox" bind:checked={editing.gallery_enabled} />
         Gallery enabled
       </label>
-      <label>
-        Vars (JSON object)
-        <textarea rows="5" bind:value={editingVarsText}></textarea>
-      </label>
-      <label>
-        Guest-facing text overrides (JSON object — for other languages, e.g. <code
-          >&#123;"attract_cta":"Berühre einen Knopf","gallery_word":"Galerie"&#125;</code
-        >. Any key you leave out uses the English default. Known keys: attract_cta,
-        gallery_word, capturing_label, print_button, print_button_busy, qr_caption,
-        gallery_loading, gallery_empty, gallery_not_available.)
-        <textarea rows="6" bind:value={editingStringsText}></textarea>
-      </label>
+
+      <fieldset>
+        <legend>Placeholder variables ({'{event.<key>}'} in template text)</legend>
+        <VarsEditor bind:vars={editing.vars} />
+      </fieldset>
+
+      <fieldset>
+        <legend>Guest-facing text overrides (for other languages)</legend>
+        <StringsEditor bind:strings={editing.strings} />
+      </fieldset>
+
       <button type="submit">Save</button>
       {#if saveStatus}<span class="status">{saveStatus}</span>{/if}
       {#if editError}<span class="error">{editError}</span>{/if}
     </form>
   {/if}
 </section>
+
+{#if showWizard}
+  <EventWizard onclose={() => (showWizard = false)} oncreated={onWizardCreated} />
+{/if}
 
 <style>
   .events-panel {
@@ -336,6 +428,32 @@
     padding: 0.75rem;
     border-radius: var(--radius-sm);
     margin: 0;
+  }
+
+  .toolbar {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .new-event {
+    padding: 0.55rem 1.1rem;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--color-primary);
+    color: var(--color-primary-contrast);
+    font-weight: 500;
+    cursor: pointer;
+    transition:
+      background-color 200ms var(--ease-spring),
+      transform 150ms var(--ease-spring);
+  }
+
+  .new-event:hover {
+    background: var(--color-primary-hover);
+  }
+
+  .new-event:active {
+    transform: scale(0.97);
   }
 
   .event-list {
@@ -362,6 +480,28 @@
     box-shadow: 0 0 0 1px var(--color-primary);
   }
 
+  .duplicate-form {
+    flex-wrap: wrap;
+    padding: 0.6rem !important;
+  }
+
+  .duplicate-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.8rem;
+    color: var(--color-ink-muted);
+  }
+
+  .duplicate-form input {
+    font-size: 0.9rem;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+    color: var(--color-ink);
+  }
+
   .event-row {
     flex: 1;
     text-align: left;
@@ -379,24 +519,37 @@
     color: var(--color-ink-muted);
   }
 
-  .activate {
+  .activate,
+  .secondary {
     padding: 0.45rem 0.85rem;
     border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-sm);
     background: var(--color-surface);
     color: var(--color-ink);
     font-weight: 500;
+    cursor: pointer;
     transition:
       background-color 200ms var(--ease-spring),
       transform 150ms var(--ease-spring);
   }
 
-  .activate:hover {
+  .activate:hover,
+  .secondary:hover {
     background: var(--color-surface-alt);
   }
 
-  .activate:active {
+  .activate:active,
+  .secondary:active {
     transform: scale(0.96);
+  }
+
+  .secondary.danger {
+    color: var(--color-danger-fg);
+  }
+
+  .secondary:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 
   .editor {
@@ -406,7 +559,7 @@
     border: 1px solid var(--color-border);
     border-radius: var(--radius);
     padding: 1rem;
-    max-width: 32rem;
+    max-width: 36rem;
     background: var(--color-surface);
   }
 
@@ -428,14 +581,25 @@
     color: var(--color-ink);
   }
 
-  .editor input[type='text'],
-  .editor textarea {
+  .editor input[type='text'] {
     font-size: 0.95rem;
     padding: 0.45rem 0.6rem;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
     background: var(--color-surface);
     color: var(--color-ink);
+  }
+
+  .editor fieldset {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 0.75rem;
+  }
+
+  .editor legend {
+    font-size: 0.85rem;
+    color: var(--color-ink-muted);
+    padding: 0 0.3rem;
   }
 
   .image-field {

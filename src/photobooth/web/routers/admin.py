@@ -18,15 +18,23 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
+import shutil
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from pydantic import BaseModel
 
 from photobooth.camera.client import CameraWorkerClient
 from photobooth.camera.protocol import CameraDisconnectedError, CameraError
-from photobooth.config.event import EventConfig, load_event
+from photobooth.config.event import EventConfig, EventTheme, load_event
+from photobooth.config.event_templates import (
+    EVENT_TEMPLATE_PRESETS,
+    EventTemplatePreset,
+    get_preset,
+)
 from photobooth.config.models import Settings
 from photobooth.core.state import InvalidTransitionError
 from photobooth.pipeline.compositor import render_variant
@@ -183,6 +191,95 @@ async def upload_event_image(
     updated = event.model_copy(update={field: new_filename})
     (event_dir / "event.yaml").write_text(yaml.safe_dump(updated.model_dump(), sort_keys=False))
     return updated
+
+
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+
+def _validate_slug(slug: str) -> None:
+    if not _SLUG_RE.match(slug):
+        raise HTTPException(
+            status_code=400,
+            detail="id must be lowercase letters, digits, and hyphens (max 64 chars)",
+        )
+
+
+@router.get("/event-templates")
+def list_event_templates() -> list[EventTemplatePreset]:
+    return EVENT_TEMPLATE_PRESETS
+
+
+class CreateEventRequest(BaseModel):
+    id: str
+    title: str
+    date: str = ""
+    based_on: str | None = None
+
+
+@router.post("/events")
+def create_event(body: CreateEventRequest, settings: SettingsDep) -> EventConfig:
+    _validate_slug(body.id)
+    event_dir = settings.events.base_dir / body.id
+    if event_dir.exists():
+        raise HTTPException(status_code=409, detail="an event with this id already exists")
+
+    preset = get_preset(body.based_on) if body.based_on else None
+    if body.based_on and preset is None:
+        raise HTTPException(status_code=400, detail=f"unknown template {body.based_on!r}")
+
+    modes = preset.modes if preset else []
+    event = EventConfig(
+        id=body.id,
+        title=body.title,
+        date=body.date,
+        template=modes[0].template if modes else "single.yaml",
+        modes=modes,
+        theme=EventTheme(
+            primary_color=preset.primary_color if preset else "",
+            scrim_color=preset.scrim_color if preset else "",
+        ),
+        vars=dict.fromkeys(preset.vars_hint, "") if preset else {},
+    )
+
+    event_dir.mkdir(parents=True)
+    (event_dir / "event.yaml").write_text(yaml.safe_dump(event.model_dump(), sort_keys=False))
+    return event
+
+
+class DuplicateEventRequest(BaseModel):
+    new_id: str
+    new_title: str
+
+
+@router.post("/events/{event_id}/duplicate")
+def duplicate_event(
+    event_id: str, body: DuplicateEventRequest, settings: SettingsDep
+) -> EventConfig:
+    _validate_slug(body.new_id)
+    source_dir = settings.events.base_dir / event_id
+    if not source_dir.is_dir():
+        raise HTTPException(status_code=404, detail="event not found")
+    dest_dir = settings.events.base_dir / body.new_id
+    if dest_dir.exists():
+        raise HTTPException(status_code=409, detail="an event with this id already exists")
+
+    shutil.copytree(source_dir, dest_dir)
+    updated = load_event(settings.events.base_dir, event_id).model_copy(
+        update={"id": body.new_id, "title": body.new_title}
+    )
+    (dest_dir / "event.yaml").write_text(yaml.safe_dump(updated.model_dump(), sort_keys=False))
+    return updated
+
+
+@router.delete("/events/{event_id}")
+def delete_event(event_id: str, request: Request, settings: SettingsDep) -> dict[str, bool]:
+    event_dir = settings.events.base_dir / event_id
+    if not event_dir.is_dir():
+        raise HTTPException(status_code=404, detail="event not found")
+    if event_id == request.app.state.active_event_id:
+        raise HTTPException(status_code=409, detail="cannot delete the active event")
+    shutil.rmtree(event_dir)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

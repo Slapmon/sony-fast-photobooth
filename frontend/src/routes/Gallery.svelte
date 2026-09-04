@@ -214,7 +214,7 @@
   .lightbox {
     position: fixed;
     inset: 0;
-    background: rgba(20, 16, 12, 0.85);
+    background: color-mix(in srgb, var(--color-scrim) 85%, transparent);
     display: flex;
     align-items: center;
     justify-content: center;
