@@ -364,6 +364,140 @@ def test_delete_event_409s_for_active_event(client: TestClient) -> None:
     assert response.status_code == 409
 
 
+# ---------------------------------------------------------------------------
+# Delivery configuration
+# ---------------------------------------------------------------------------
+
+
+def test_get_delivery_config_returns_defaults_when_unset(client: TestClient) -> None:
+    _login(client)
+    response = client.get("/admin/delivery")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["backend"] == "local"
+    assert body["sftp"]["password_set"] is False
+    assert body["sftp"]["private_key_set"] is False
+    assert body["public_base_url"] == ""
+
+
+def test_update_delivery_config_persists_password_to_disk(
+    client: TestClient, config_path: Path
+) -> None:
+    _login(client)
+    response = client.put(
+        "/admin/delivery",
+        json={
+            "backend": "sftp",
+            "sftp": {
+                "host": "sftp.example.com",
+                "port": 2222,
+                "username": "booth",
+                "password": "s3cret",
+                "remote_path": "/uploads",
+            },
+            "public_base_url": "https://photos.example.com",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sftp"]["password_set"] is True
+    assert "s3cret" not in response.text  # never round-tripped to the browser
+
+    on_disk = yaml.safe_load(config_path.read_text())
+    assert on_disk["delivery"]["sftp"]["password"] == "s3cret"
+    assert on_disk["delivery"]["sftp"]["host"] == "sftp.example.com"
+    assert on_disk["delivery"]["public_base_url"] == "https://photos.example.com"
+
+
+def test_update_delivery_config_blank_password_keeps_existing(
+    client: TestClient, config_path: Path
+) -> None:
+    _login(client)
+    client.put(
+        "/admin/delivery",
+        json={
+            "backend": "sftp",
+            "sftp": {"host": "sftp.example.com", "username": "booth", "password": "s3cret"},
+        },
+    )
+
+    response = client.put(
+        "/admin/delivery",
+        json={
+            "backend": "sftp",
+            "sftp": {"host": "sftp.example.com", "username": "booth", "remote_path": "/new-path"},
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["sftp"]["password_set"] is True
+
+    on_disk = yaml.safe_load(config_path.read_text())
+    assert on_disk["delivery"]["sftp"]["password"] == "s3cret"
+    assert on_disk["delivery"]["sftp"]["remote_path"] == "/new-path"
+
+
+def test_upload_delivery_key_sets_private_key_path(
+    client: TestClient, config_path: Path, tmp_path: Path
+) -> None:
+    _login(client)
+    response = client.post(
+        "/admin/delivery/upload-key",
+        files={"file": ("id_ed25519", b"fake-private-key-bytes", "application/octet-stream")},
+    )
+    assert response.status_code == 200
+    assert response.json()["sftp"]["private_key_set"] is True
+
+    on_disk = yaml.safe_load(config_path.read_text())
+    key_path = Path(on_disk["delivery"]["sftp"]["private_key_path"])
+    assert key_path.is_file()
+    assert key_path.read_bytes() == b"fake-private-key-bytes"
+
+
+def test_test_delivery_local_backend_is_always_ok(client: TestClient) -> None:
+    _login(client)
+    client.put("/admin/delivery", json={"backend": "local"})
+    response = client.post("/admin/actions/test-delivery")
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+
+
+def test_test_delivery_sftp_reports_failure_detail(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _login(client)
+    client.put(
+        "/admin/delivery",
+        json={"backend": "sftp", "sftp": {"host": "unreachable.example.com", "username": "x"}},
+    )
+
+    def fake_test_sftp_connection(cfg: object) -> None:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(admin, "test_sftp_connection", fake_test_sftp_connection)
+
+    response = client.post("/admin/actions/test-delivery")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert "connection refused" in body["detail"]
+
+
+def test_test_delivery_sftp_success(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _login(client)
+    client.put(
+        "/admin/delivery",
+        json={"backend": "sftp", "sftp": {"host": "sftp.example.com", "username": "booth"}},
+    )
+
+    monkeypatch.setattr(admin, "test_sftp_connection", lambda cfg: None)
+
+    response = client.post("/admin/actions/test-delivery")
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+
+
 def _fake_jpeg_bytes() -> bytes:
     buf = io.BytesIO()
     Image.new("RGB", (4, 4), color="red").save(buf, format="JPEG")

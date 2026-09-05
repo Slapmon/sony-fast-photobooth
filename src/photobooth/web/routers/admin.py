@@ -37,7 +37,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from photobooth.camera.client import CameraWorkerClient
 from photobooth.camera.protocol import CameraDisconnectedError, CameraError
@@ -47,8 +47,9 @@ from photobooth.config.event_templates import (
     EventTemplatePreset,
     get_preset,
 )
-from photobooth.config.models import Settings
+from photobooth.config.models import DeliveryConfig, Settings
 from photobooth.core.state import InvalidTransitionError
+from photobooth.delivery.backend import test_sftp_connection
 from photobooth.pipeline.compositor import render_variant
 from photobooth.pipeline.template import TemplateValidationError, load_template
 from photobooth.printing.backend import PrinterBackend
@@ -306,6 +307,160 @@ def delete_event(event_id: str, request: Request, settings: SettingsDep) -> dict
         raise HTTPException(status_code=409, detail="cannot delete the active event")
     shutil.rmtree(event_dir)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Delivery configuration (SFTP/local upload target + QR direct-file link)
+# ---------------------------------------------------------------------------
+
+_SFTP_KEY_FILENAME = "sftp_key"
+
+
+def _read_delivery_config(config_path: Path) -> dict[str, Any]:
+    data = yaml.safe_load(config_path.read_text())
+    return data.get("delivery") or {}
+
+
+def _redact_delivery(delivery: dict[str, Any]) -> dict[str, Any]:
+    """Never round-trips secrets back to the browser — the panel shows
+    "password set: yes/no", not the actual value, same convention a normal
+    change-password form uses. See PUT below for how a blank password field
+    in a request means "leave the saved one unchanged" rather than "clear
+    it," so this redaction doesn't create a lost-update trap.
+    """
+    sftp = delivery.get("sftp") or {}
+    return {
+        "backend": delivery.get("backend", "local"),
+        "sftp": {
+            "host": sftp.get("host", ""),
+            "port": sftp.get("port", 22),
+            "username": sftp.get("username", ""),
+            "remote_path": sftp.get("remote_path", ""),
+            "password_set": bool(sftp.get("password")),
+            "private_key_set": bool(sftp.get("private_key_path")),
+        },
+        "public_base_url": delivery.get("public_base_url", ""),
+    }
+
+
+@router.get("/delivery")
+def get_delivery_config(request: Request) -> dict[str, Any]:
+    return _redact_delivery(_read_delivery_config(request.app.state.config_path))
+
+
+class DeliverySftpUpdate(BaseModel):
+    host: str = ""
+    port: int = 22
+    username: str = ""
+    # None or blank: keep the currently saved password unchanged — the
+    # panel never pre-fills this field with the real value, so "the
+    # operator left it blank" and "the operator wants no password" are
+    # indistinguishable on purpose; use the private-key upload for
+    # key-only auth instead of an intentionally-blank password.
+    password: str | None = None
+    remote_path: str = ""
+
+
+class DeliveryUpdateRequest(BaseModel):
+    backend: Literal["local", "sftp", "s3"]
+    sftp: DeliverySftpUpdate = DeliverySftpUpdate()
+    public_base_url: str = ""
+
+
+@router.put("/delivery")
+def update_delivery_config(body: DeliveryUpdateRequest, request: Request) -> dict[str, Any]:
+    config_path: Path = request.app.state.config_path
+    yaml_data = yaml.safe_load(config_path.read_text())
+    existing_delivery = yaml_data.get("delivery") or {}
+    existing_sftp = existing_delivery.get("sftp") or {}
+
+    password = body.sftp.password or existing_sftp.get("password", "")
+    merged_delivery = {
+        **existing_delivery,
+        "backend": body.backend,
+        "sftp": {
+            "host": body.sftp.host,
+            "port": body.sftp.port,
+            "username": body.sftp.username,
+            "password": password,
+            # Only POST /admin/delivery/upload-key changes this — never
+            # settable through this JSON body (no file upload here).
+            "private_key_path": existing_sftp.get("private_key_path"),
+            "remote_path": body.sftp.remote_path,
+        },
+        "public_base_url": body.public_base_url,
+    }
+
+    try:
+        validated = DeliveryConfig.model_validate(merged_delivery)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # mode="json" turns sftp.private_key_path (a Path) into a plain string
+    # — yaml.safe_dump can't serialize a Path object directly.
+    yaml_data["delivery"] = validated.model_dump(mode="json")
+    config_path.write_text(yaml.safe_dump(yaml_data, sort_keys=False))
+    return _redact_delivery(yaml_data["delivery"])
+
+
+@router.post("/delivery/upload-key")
+async def upload_delivery_key(
+    request: Request, settings: SettingsDep, file: Annotated[UploadFile, File()]
+) -> dict[str, Any]:
+    data = await file.read(_MAX_UPLOAD_BYTES + 1)
+    if len(data) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file too large")
+
+    # Alongside the sqlite DB (already root/service-owned per
+    # config/pi.yaml's storage.sqlite_path, e.g. /var/lib/photobooth/) —
+    # outside the git repo and outside any web-served directory.
+    key_path = settings.storage.sqlite_path.parent / _SFTP_KEY_FILENAME
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    key_path.write_bytes(data)
+    with contextlib.suppress(OSError):
+        key_path.chmod(0o600)
+
+    return _set_private_key_path(request.app.state.config_path, key_path)
+
+
+def _set_private_key_path(config_path: Path, key_path: Path) -> dict[str, Any]:
+    # Split out of upload_delivery_key() (an async def, for the file
+    # upload's `await file.read(...)`) — ruff's ASYNC240 flags blocking
+    # pathlib calls directly inside an async body, matching this file's
+    # existing CAPTURES_DIR.mkdir()-at-module-level precedent.
+    yaml_data = yaml.safe_load(config_path.read_text())
+    delivery = yaml_data.setdefault("delivery", {})
+    sftp = delivery.setdefault("sftp", {})
+    sftp["private_key_path"] = str(key_path)
+    config_path.write_text(yaml.safe_dump(yaml_data, sort_keys=False))
+    return _redact_delivery(yaml_data["delivery"])
+
+
+@router.post("/actions/test-delivery")
+def test_delivery(request: Request) -> dict[str, Any]:
+    """Tests exactly what's currently saved on disk (not the possibly-stale
+    in-memory Settings, which only reloads on Restart App) — so an operator
+    can validate a save before bothering to restart. Never a 5xx for a bad
+    password/host/path: that's an expected "test failed" outcome, reported
+    as {"ok": false, "detail": "..."}."""
+    delivery_data = _read_delivery_config(request.app.state.config_path)
+    try:
+        config = DeliveryConfig.model_validate(delivery_data)
+    except ValidationError as exc:
+        return {"ok": False, "detail": str(exc)}
+
+    if config.backend == "local":
+        return {"ok": True, "detail": "Local delivery needs no connection test."}
+    if config.backend == "sftp":
+        try:
+            test_sftp_connection(config.sftp)
+        except Exception as exc:  # paramiko/OSError family — any failure is "not ok"
+            return {"ok": False, "detail": str(exc)}
+        return {"ok": True, "detail": "Connected — remote path is reachable and writable."}
+    return {
+        "ok": False,
+        "detail": f"no connection test implemented yet for backend {config.backend!r}",
+    }
 
 
 # ---------------------------------------------------------------------------

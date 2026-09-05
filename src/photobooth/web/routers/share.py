@@ -103,14 +103,41 @@ def get_share(token: str, db: DbDep) -> dict[str, Any]:
     }
 
 
+def _qr_target(request: Request, db: sqlite3.Connection, token: str, session_id: str) -> str:
+    """Where the QR actually sends a guest. `share_public_base_url` set
+    (DeliveryConfig.public_base_url — a real delivery target's public
+    static-file host): link straight to the delivered file, no dependency
+    on this app running anywhere else. Unset (LAN-only testing, no real
+    delivery target yet): fall back to this app's own `/s/{token}` share
+    page, exactly like before this change.
+    """
+    base = getattr(request.app.state, "share_public_base_url", "")
+    if not base:
+        return _share_url(request, token)
+
+    # One deliverable per session (the composite for a multi-shot template,
+    # or the single raw shot for a 1-slot one — see web/session.py's
+    # capture()); list_by_session is already filtered to is_deliverable=1.
+    captures = CaptureRepo(db).list_by_session(session_id)
+    if not captures:
+        # A share_token is only ever issued once the deliverable exists
+        # (session.py's _issue_share_token_and_enqueue_uploads runs after
+        # _finalize_capture) — this should be unreachable, but a generic
+        # 404 is the right failure mode if it ever happens rather than a
+        # broken QR image.
+        raise HTTPException(status_code=404, detail=_NOT_FOUND_DETAIL)
+    capture_id = captures[0][0]
+    return f"{base.rstrip('/')}/{capture_id}.jpg"
+
+
 @router.get("/{token}/qr.png")
 def get_share_qr(token: str, request: Request, db: DbDep) -> Response:
     # Resolve first so an unknown token 404s identically to GET /s/{token}
     # rather than generating (and leaking timing/existence info via) a QR
     # code for a token that doesn't exist.
-    _resolve_session(db, token)
+    session = _resolve_session(db, token)
 
-    url = _share_url(request, token)
+    url = _qr_target(request, db, token, session["id"])
     img = qrcode.make(url)
     buffer = io.BytesIO()
     img.save(buffer, format="PNG")

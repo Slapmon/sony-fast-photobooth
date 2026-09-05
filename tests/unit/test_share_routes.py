@@ -122,6 +122,45 @@ def test_qr_png_is_a_valid_image(http_client: TestClient, test_app: FastAPI) -> 
     assert img2.height > 50
 
 
+def test_qr_uses_direct_file_link_when_public_base_url_configured(
+    http_client: TestClient, test_app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unlike the sibling QR tests above (which only check image validity —
+    see the module docstring's "monkeypatch-free" note), this one needs to
+    verify the actual URL encoded: DeliveryConfig's direct-file-link mode
+    IS the thing under test, so a valid-but-wrong-target QR would pass
+    those tests and still be a real bug.
+    """
+    test_app.state.share_public_base_url = "https://photos.example.com"
+    _seed_session(test_app, "session-1", "wedding-1", "tok-direct")
+    CaptureRepo(test_app.state.db).create("capture-1", "session-1")
+
+    captured_urls: list[str] = []
+
+    def fake_make(url: str) -> Image.Image:
+        captured_urls.append(url)
+        return Image.new("RGB", (100, 100))
+
+    monkeypatch.setattr(share.qrcode, "make", fake_make)
+
+    response = http_client.get("/s/tok-direct/qr.png")
+
+    assert response.status_code == 200
+    assert captured_urls == ["https://photos.example.com/capture-1.jpg"]
+
+
+def test_qr_404s_in_direct_file_mode_when_no_deliverable_capture_yet(
+    http_client: TestClient, test_app: FastAPI
+) -> None:
+    test_app.state.share_public_base_url = "https://photos.example.com"
+    _seed_session(test_app, "session-1", "wedding-1", "tok-nodeliver")
+    # No CaptureRepo.create() call — the token is real, nothing deliverable yet.
+
+    response = http_client.get("/s/tok-nodeliver/qr.png")
+
+    assert response.status_code == 404
+
+
 def test_session_repo_share_token_round_trip(test_app: FastAPI) -> None:
     db = test_app.state.db
     sessions = SessionRepo(db)

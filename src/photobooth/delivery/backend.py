@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from photobooth.config.models import DeliveryConfig
+from photobooth.config.models import DeliveryConfig, SftpDeliveryConfig
 
 if TYPE_CHECKING:
     import paramiko
@@ -104,30 +104,18 @@ class SftpBackend(DeliveryBackend):
         self._config = config.sftp
 
     def _upload_sync(self, local_path: Path, remote_key: str) -> None:
-        import paramiko
-
         cfg = self._config
-        transport = paramiko.Transport((cfg.host, cfg.port))
+        transport, sftp = _open_sftp(cfg)
         try:
-            if cfg.private_key_path:
-                pkey = paramiko.RSAKey.from_private_key_file(str(cfg.private_key_path))
-                transport.connect(username=cfg.username, pkey=pkey)
-            else:
-                transport.connect(username=cfg.username, password=cfg.password)
-            sftp = paramiko.SFTPClient.from_transport(transport)
-            if sftp is None:
-                raise OSError(f"could not open SFTP session to {cfg.host}")
-            try:
-                remote_path = f"{cfg.remote_path.rstrip('/')}/{remote_key}"
-                # Ensure the remote directory exists — mkdir per missing
-                # path segment, ignoring "already exists" since SFTP has no
-                # mkdir -p.
-                remote_dir = remote_path.rsplit("/", 1)[0]
-                _sftp_makedirs(sftp, remote_dir)
-                sftp.put(str(local_path), remote_path)
-            finally:
-                sftp.close()
+            remote_path = f"{cfg.remote_path.rstrip('/')}/{remote_key}"
+            # Ensure the remote directory exists — mkdir per missing
+            # path segment, ignoring "already exists" since SFTP has no
+            # mkdir -p.
+            remote_dir = remote_path.rsplit("/", 1)[0]
+            _sftp_makedirs(sftp, remote_dir)
+            sftp.put(str(local_path), remote_path)
         finally:
+            sftp.close()
             transport.close()
 
     async def upload(self, local_path: Path, remote_key: str) -> str:
@@ -135,6 +123,64 @@ class SftpBackend(DeliveryBackend):
         cfg = self._config
         remote_path = f"{cfg.remote_path.rstrip('/')}/{remote_key}"
         return f"sftp://{cfg.host}{remote_path}"
+
+
+def _load_private_key(path: Path) -> paramiko.PKey:
+    """Try every key type paramiko supports, in rough order of how common
+    each is for a freshly generated "upload account" key today (Ed25519 is
+    the modern default from `ssh-keygen`, RSA the long-standing one; ECDSA
+    and DSA are rarer but cheap to also try). Raises the last error if none
+    load — a single hardcoded `RSAKey.from_private_key_file` (the previous
+    behavior) would silently fail for anyone who generated an Ed25519 key,
+    which is now the common case."""
+    import paramiko
+
+    key_classes = (paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.RSAKey, paramiko.DSSKey)
+    last_error: Exception | None = None
+    for key_class in key_classes:
+        try:
+            return key_class.from_private_key_file(str(path))
+        except paramiko.SSHException as exc:
+            last_error = exc
+    assert last_error is not None
+    raise last_error
+
+
+def _open_sftp(cfg: SftpDeliveryConfig) -> tuple[paramiko.Transport, paramiko.SFTPClient]:
+    """Shared connect+auth routine for both a real upload (`SftpBackend`)
+    and the admin panel's "Test Connection" check (`test_sftp_connection`)
+    — one place to get auth right, matching either code path exactly."""
+    import paramiko
+
+    transport = paramiko.Transport((cfg.host, cfg.port))
+    try:
+        if cfg.private_key_path:
+            pkey = _load_private_key(cfg.private_key_path)
+            transport.connect(username=cfg.username, pkey=pkey)
+        else:
+            transport.connect(username=cfg.username, password=cfg.password)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+        if sftp is None:
+            raise OSError(f"could not open SFTP session to {cfg.host}")
+    except Exception:
+        transport.close()
+        raise
+    return transport, sftp
+
+
+def test_sftp_connection(cfg: SftpDeliveryConfig) -> None:
+    """Connects, authenticates, and confirms `cfg.remote_path` is reachable
+    and writable (via the same `_sftp_makedirs` the real upload uses) —
+    proves more than "auth succeeded," since a wrong remote path is just as
+    common a misconfiguration as a wrong password. Raises on any failure;
+    returning normally IS the success signal (admin.py's route wraps this
+    in try/except and reports ok/error to the operator)."""
+    transport, sftp = _open_sftp(cfg)
+    try:
+        _sftp_makedirs(sftp, cfg.remote_path)
+    finally:
+        sftp.close()
+        transport.close()
 
 
 def _sftp_makedirs(sftp: paramiko.SFTPClient, remote_dir: str) -> None:

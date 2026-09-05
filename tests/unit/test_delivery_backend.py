@@ -10,10 +10,12 @@ catches them) rather than being silently swallowed.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+import paramiko as real_paramiko
 import pytest
 
 from photobooth.config.models import DeliveryConfig, S3DeliveryConfig, SftpDeliveryConfig
@@ -127,6 +129,94 @@ async def test_sftp_backend_propagates_errors(
 
     with pytest.raises(OSError, match="connection refused"):
         await backend.upload(local_path, "abc123.jpg")
+
+
+# ---------------------------------------------------------------------------
+# test_sftp_connection + _load_private_key (admin panel "Test Connection")
+# ---------------------------------------------------------------------------
+
+
+def test_sftp_connection_succeeds_when_remote_path_reachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_sftp_client = MagicMock()
+    fake_sftp_client.stat.return_value = MagicMock()  # remote_path already exists
+    fake_transport = MagicMock()
+    fake_paramiko = MagicMock()
+    fake_paramiko.Transport.return_value = fake_transport
+    fake_paramiko.SFTPClient.from_transport.return_value = fake_sftp_client
+    monkeypatch.setitem(sys.modules, "paramiko", fake_paramiko)
+
+    import photobooth.delivery.backend as backend_module
+
+    cfg = SftpDeliveryConfig(
+        host="sftp.example.com", username="booth", password="secret", remote_path="/uploads"
+    )
+
+    backend_module.test_sftp_connection(cfg)  # must not raise
+
+    fake_transport.connect.assert_called_once_with(username="booth", password="secret")
+    fake_sftp_client.close.assert_called_once()
+    fake_transport.close.assert_called_once()
+
+
+def test_sftp_connection_raises_on_connect_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_paramiko = MagicMock()
+    fake_paramiko.Transport.side_effect = OSError("connection refused")
+    monkeypatch.setitem(sys.modules, "paramiko", fake_paramiko)
+
+    import photobooth.delivery.backend as backend_module
+
+    cfg = SftpDeliveryConfig(host="unreachable.example.com", username="booth")
+
+    with pytest.raises(OSError, match="connection refused"):
+        backend_module.test_sftp_connection(cfg)
+
+
+def test_load_private_key_falls_back_through_key_types(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paramiko = MagicMock()
+    fake_paramiko.SSHException = real_paramiko.SSHException
+    fake_paramiko.Ed25519Key.from_private_key_file.side_effect = real_paramiko.SSHException(
+        "not ed25519"
+    )
+    fake_paramiko.ECDSAKey.from_private_key_file.side_effect = real_paramiko.SSHException(
+        "not ecdsa"
+    )
+    fake_rsa_key = MagicMock()
+    fake_paramiko.RSAKey.from_private_key_file.return_value = fake_rsa_key
+    monkeypatch.setitem(sys.modules, "paramiko", fake_paramiko)
+
+    import photobooth.delivery.backend as backend_module
+
+    key_path = tmp_path / "id_rsa"
+    key_path.write_text("fake key material")
+
+    result = backend_module._load_private_key(key_path)
+
+    assert result is fake_rsa_key
+    fake_paramiko.DSSKey.from_private_key_file.assert_not_called()
+
+
+def test_load_private_key_raises_last_error_when_no_type_matches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paramiko = MagicMock()
+    fake_paramiko.SSHException = real_paramiko.SSHException
+    for name in ("Ed25519Key", "ECDSAKey", "RSAKey", "DSSKey"):
+        getattr(fake_paramiko, name).from_private_key_file.side_effect = (
+            real_paramiko.SSHException(f"not {name}")
+        )
+    monkeypatch.setitem(sys.modules, "paramiko", fake_paramiko)
+
+    import photobooth.delivery.backend as backend_module
+
+    key_path = tmp_path / "id_bad"
+    key_path.write_text("garbage")
+
+    with pytest.raises(real_paramiko.SSHException, match="not DSSKey"):
+        backend_module._load_private_key(key_path)
 
 
 async def test_s3_backend_uploads_via_boto3(
