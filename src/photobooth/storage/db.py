@@ -31,7 +31,14 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS captures (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id),
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- True for the one capture per session guests actually see/print/share
+    -- (a composited collage/strip, or the raw shot itself for a 1-slot
+    -- template) — false for the raw per-slot shots that only feed a
+    -- composite. Gallery/share listings filter to this; retention sweeps
+    -- and admin reprint-by-id ignore it (every row's files still get
+    -- cleaned up / are still reprintable). See web/session.py's capture().
+    is_deliverable INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS spans (
@@ -75,4 +82,14 @@ def connect(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
+    # `CREATE TABLE IF NOT EXISTS` above doesn't add columns to a table that
+    # already existed on disk (e.g. the Pi's real database from before this
+    # column existed) — migrate those in place. DEFAULT 1 is correct for
+    # every pre-existing row: they were all captured before compositing
+    # existed, so each one already *was* the guest-facing deliverable.
+    try:
+        conn.execute("ALTER TABLE captures ADD COLUMN is_deliverable INTEGER NOT NULL DEFAULT 1")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # column already exists
     return conn

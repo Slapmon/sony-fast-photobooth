@@ -61,6 +61,25 @@ class ImageOverlay(BaseModel):
     h: int
 
 
+class LogoOverlay(BaseModel):
+    """Unlike ImageOverlay, this overlay's image isn't a fixed template
+    asset — it's resolved at render time from the active event's own
+    `EventConfig.logo_image` (already used for on-screen branding), only
+    when the event has both a logo uploaded AND
+    `EventConfig.include_logo_in_prints` turned on. Skipped entirely
+    (renders nothing) when neither is true, so a template can declare this
+    unconditionally and it stays a true per-event *option*, not something
+    every event is forced to show. `x, y, w, h` is a bounding box the logo
+    is scaled to fit within (aspect preserved) and bottom-right-aligned
+    inside — see compositor.py's `_composite`."""
+
+    type: Literal["logo"] = "logo"
+    x: int
+    y: int
+    w: int
+    h: int
+
+
 class TextOverlay(BaseModel):
     type: Literal["text"] = "text"
     content: str
@@ -80,7 +99,7 @@ class TextOverlay(BaseModel):
     y_offset: int = 0
 
 
-Overlay = Annotated[ImageOverlay | TextOverlay, Field(discriminator="type")]
+Overlay = Annotated[ImageOverlay | TextOverlay | LogoOverlay, Field(discriminator="type")]
 
 
 class PrintVariantSpec(BaseModel):
@@ -132,6 +151,10 @@ def load_template(path: Path) -> TemplateConfig:
 
     template_dir = path.parent
     for i, overlay in enumerate(template.overlays):
+        if isinstance(overlay, LogoOverlay):
+            # No fixed asset to check — its image comes from the active
+            # event at render time, may legitimately not exist yet.
+            continue
         rel = overlay.src if isinstance(overlay, ImageOverlay) else overlay.font
         field_name = "src" if isinstance(overlay, ImageOverlay) else "font"
         resolved = template_dir / rel

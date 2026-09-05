@@ -255,7 +255,9 @@ async def test_arm_with_unknown_mode_id_falls_back_to_first_mode(
 async def test_multi_slot_template_drives_n_shots(worker_port: int, tmp_path: Path) -> None:
     """A 2-slot template runs the COUNTDOWN -> CAPTURING -> COUNTDOWN ->
     CAPTURING -> REVIEW cycle, broadcasting one PreviewReady/FullImageReady
-    per shot and persisting one CaptureRepo row per shot."""
+    per shot, then composites the 2 raw shots into one deliverable
+    capture_id (a 3rd FullImageReady, for the composite) and persists a
+    captures row for each raw shot plus one for the composite (3 total)."""
     session_manager = _templated_session_manager(worker_port, tmp_path, "two-shot-event")
     ws = FakeWebSocket()
     await session_manager.register(ws)
@@ -266,14 +268,22 @@ async def test_multi_slot_template_drives_n_shots(worker_port: int, tmp_path: Pa
     await session_manager.capture()
 
     assert session_manager.state == SessionState.REVIEW
-    assert len(session_manager.capture_ids) == 2
-    assert len(set(session_manager.capture_ids)) == 2  # distinct capture_ids
+    # Exactly one deliverable (the composite), not one per raw shot.
+    assert len(session_manager.capture_ids) == 1
+    composite_id = session_manager.capture_ids[0]
+
+    composite_path = tmp_path / "captures" / f"{composite_id}.jpg"
+    assert composite_path.is_file()
+    assert composite_path.read_bytes()[:2] == b"\xff\xd8"  # JPEG SOI marker
 
     events = _decoded_events(ws)
     types = [type(e) for e in events]
     assert types.count(CountdownStarted) == 2
     assert types.count(PreviewReady) == 2
-    assert types.count(FullImageReady) == 2
+    # 2 raw-shot broadcasts + 1 for the finished composite.
+    assert types.count(FullImageReady) == 3
+    full_images = [e for e in events if isinstance(e, FullImageReady)]
+    assert full_images[-1].capture_id == composite_id
 
     countdowns = [e for e in events if isinstance(e, CountdownStarted)]
     assert [c.shot_index for c in countdowns] == [0, 1]
@@ -296,9 +306,12 @@ async def test_multi_slot_template_drives_n_shots(worker_port: int, tmp_path: Pa
 
     db: sqlite3.Connection = session_manager._db  # noqa: SLF001
     capture_rows = db.execute(
-        "SELECT id FROM captures WHERE session_id = ?", (session_manager.session_id,)
+        "SELECT id, is_deliverable FROM captures WHERE session_id = ?",
+        (session_manager.session_id,),
     ).fetchall()
-    assert len(capture_rows) == 2
+    assert len(capture_rows) == 3  # 2 raw shots + 1 composite
+    deliverable_rows = [row for row in capture_rows if row[1] == 1]
+    assert [row[0] for row in deliverable_rows] == [composite_id]
 
 
 async def test_next_trigger_waits_for_previous_download_full_to_finish(
@@ -350,7 +363,7 @@ async def test_next_trigger_waits_for_previous_download_full_to_finish(
     await session_manager.capture()
 
     assert session_manager.state == SessionState.REVIEW
-    assert len(session_manager.capture_ids) == 2
+    assert len(session_manager.capture_ids) == 1  # the composite, not 2 raw shots
 
     events_by_label = {label: ts for label, ts in call_log}
     first_download_end = events_by_label["download_full_end_1"]

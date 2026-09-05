@@ -355,7 +355,9 @@ def preview_template(name: str, request: Request, settings: SettingsDep) -> Resp
     source_images = [SAMPLE_SHOT] * len(template.slots)
 
     try:
-        jpeg_bytes = render_variant(template_path, source_images, "web", event)
+        jpeg_bytes = render_variant(
+            template_path, source_images, "web", event, settings.events.base_dir
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

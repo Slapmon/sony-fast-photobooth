@@ -34,6 +34,7 @@ from photobooth.config.event import EventConfig, resolve_placeholders
 from photobooth.pipeline.template import (
     Canvas,
     ImageOverlay,
+    LogoOverlay,
     PrintVariantSpec,
     Slot,
     TemplateConfig,
@@ -167,11 +168,33 @@ def _anchor_position(
     return x + overlay.x_offset, y + overlay.y_offset
 
 
+def _logo_path(event: EventConfig, events_dir: Path | None) -> Path | None:
+    if not event.include_logo_in_prints or not event.logo_image or events_dir is None:
+        return None
+    path = events_dir / event.id / event.logo_image
+    return path if path.is_file() else None
+
+
+def _render_logo_overlay(overlay: LogoOverlay, logo_path: Path) -> tuple[pyvips.Image, int, int]:
+    """Fit the event's logo within `overlay`'s box (aspect preserved, never
+    upscaled past the box) and bottom-right-align it inside that box —
+    matching the "logo in the corner" convention rather than stretching it
+    to fill an arbitrary rectangle."""
+    logo = pyvips.Image.new_from_file(str(logo_path))
+    if logo.interpretation != "srgb":
+        logo = logo.colourspace("srgb")
+    logo = logo.thumbnail_image(overlay.w, height=overlay.h, size="down")
+    paste_x = overlay.x + (overlay.w - logo.width)
+    paste_y = overlay.y + (overlay.h - logo.height)
+    return logo, paste_x, paste_y
+
+
 def _composite(
     template: TemplateConfig,
     template_dir: Path,
     source_images: list[Path],
     event: EventConfig,
+    events_dir: Path | None = None,
 ) -> pyvips.Image:
     """Render the full slot + overlay composite at the template's native
     (print-dpi) pixel size. Shared by every variant so callers rendering
@@ -200,6 +223,11 @@ def _composite(
             if overlay_image.interpretation != "srgb":
                 overlay_image = overlay_image.colourspace("srgb")
             canvas = canvas.composite2(overlay_image, "over", x=overlay.x, y=overlay.y)
+        elif isinstance(overlay, LogoOverlay):
+            logo_path = _logo_path(event, events_dir)
+            if logo_path is not None:
+                logo_image, paste_x, paste_y = _render_logo_overlay(overlay, logo_path)
+                canvas = canvas.composite2(logo_image, "over", x=paste_x, y=paste_y)
         else:
             text_image = _render_text_overlay(overlay, template_dir, event)
             x, y = _anchor_position(
@@ -223,10 +251,14 @@ def render_variant(
     source_images: list[Path],
     variant: str,
     event: EventConfig,
+    events_dir: Path | None = None,
 ) -> bytes:
     """Render one output variant (print/web/thumb) of `template_path`,
     compositing `source_images` (one per slot, in slot order) and resolving
-    `{event.*}` text placeholders against `event`.
+    `{event.*}` text placeholders against `event`. `events_dir` is only
+    needed when the template declares a `LogoOverlay` — it resolves
+    `events_dir/event.id/event.logo_image`; omit it (or pass an event with
+    no logo) and any `LogoOverlay` in the template simply renders nothing.
 
     Raises `ValueError` if `variant` isn't one of the template's declared
     variant keys, or if `len(source_images) != len(template.slots)`.
@@ -239,7 +271,7 @@ def render_variant(
         )
 
     template_dir = template_path.parent
-    canvas = _composite(template, template_dir, source_images, event)
+    canvas = _composite(template, template_dir, source_images, event, events_dir)
 
     spec = template.variants[variant]
     if isinstance(spec, PrintVariantSpec):

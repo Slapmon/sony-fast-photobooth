@@ -60,6 +60,8 @@
     background_image: string
     logo_image: string
     theme: EventTheme
+    countdown_s: number
+    include_logo_in_prints: boolean
     gallery_enabled: boolean
     vars: Record<string, string>
     strings: Record<string, string>
@@ -318,6 +320,16 @@
         Date
         <input type="text" bind:value={editing.date} />
       </label>
+      <label>
+        Countdown before each shot (seconds)
+        <input
+          type="number"
+          min="1"
+          max="15"
+          step="0.5"
+          bind:value={editing.countdown_s}
+        />
+      </label>
 
       <fieldset>
         <legend>Capture modes</legend>
@@ -351,6 +363,11 @@
         />
         {#if uploadingLogo}<span class="muted">Uploading…</span>{/if}
       </div>
+
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={editing.include_logo_in_prints} />
+        Include logo in the bottom-right corner of printed/delivered collage and strip photos
+      </label>
 
       {#if uploadError}<p class="error">{uploadError}</p>{/if}
 

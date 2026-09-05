@@ -68,6 +68,18 @@ class EventConfig(BaseModel):
     # background image.
     logo_image: str = ""
     theme: EventTheme = EventTheme()
+    # Seconds shown on the countdown before each shot — was a fixed
+    # SessionManager constructor default (3.0) applied to every event; now
+    # an event-level override so an operator can tune it per event without
+    # touching config/pi.yaml or code. web/session.py's arm() reads this.
+    countdown_s: float = 3.0
+    # Off by default — uploading a logo (background_image's sibling field)
+    # only shows it in the attract-screen/gallery UI chrome until this is
+    # explicitly turned on; it's a separate decision from also baking it
+    # into the bottom-right corner of printed/delivered collage and strip
+    # photos (pipeline/compositor.py's LogoOverlay), which not every event
+    # wants.
+    include_logo_in_prints: bool = False
     gallery_enabled: bool = True
     vars: dict[str, str] = {}
     # Guest-facing UI chrome (button labels, captions) — distinct from

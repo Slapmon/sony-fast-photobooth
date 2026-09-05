@@ -27,6 +27,7 @@ from photobooth.core.events import (
     encode_event,
 )
 from photobooth.core.state import SessionState, SessionStateMachine
+from photobooth.pipeline.compositor import render_variant
 from photobooth.pipeline.template import load_template
 from photobooth.storage.queue import JobQueue
 from photobooth.storage.repos import CaptureRepo, SessionRepo
@@ -68,6 +69,11 @@ class SessionManager:
         self._templates_dir = templates_dir
         self._active_event_id = active_event_id
         self._shot_count = 1
+        # Set in arm() whenever a template resolves (events_dir/templates_dir
+        # both configured) — used by capture() to know whether/how to render
+        # a composite. Event-level countdown override, same lifecycle.
+        self._armed_template_path: Path | None = None
+        self._armed_countdown_s: float | None = None
         self._machine = SessionStateMachine()
         self._session_id = uuid.uuid4().hex
         self._websockets: set[WebSocket] = set()
@@ -80,9 +86,8 @@ class SessionManager:
         # than letting a trigger queue up behind it on the one PTP handle.
         self._camera_idle = asyncio.Event()
         self._camera_idle.set()
-        # Full-resolution capture_ids for the just-completed session, in
-        # shot order. Seam for a future wave's compositor to consume — this
-        # task does not render the collage itself.
+        # The just-completed session's deliverable capture_id(s) — see the
+        # `capture_ids` property below.
         self._session_capture_ids: list[str] = []
 
     @property
@@ -103,10 +108,11 @@ class SessionManager:
 
     @property
     def capture_ids(self) -> list[str]:
-        """Full-resolution capture_ids from the most recently completed
-        session, in shot order. TODO(compositor wave): a future consumer
-        renders these slots into the template's collage composite — that
-        wiring is intentionally not done here (T-2.6 is capture-flow only).
+        """The deliverable capture_id(s) from the most recently completed
+        session — always exactly one: the composite for a multi-slot
+        template, or the single raw shot for a 1-slot template. A list for
+        API-shape stability (callers already iterate/index [0]), not
+        because a session can have more than one deliverable.
         """
         return list(self._session_capture_ids)
 
@@ -151,6 +157,8 @@ class SessionManager:
         self._machine.transition(SessionState.ARMED)
         self._session_id = uuid.uuid4().hex
         self._session_capture_ids = []
+        self._armed_template_path = None
+        self._armed_countdown_s = None
 
         event_id = self._active_event_id
         shot_count = 1
@@ -160,9 +168,12 @@ class SessionManager:
             if event.modes:
                 chosen = next((m for m in event.modes if m.id == mode_id), event.modes[0])
                 template_name = chosen.template
-            template = load_template(self._templates_dir / template_name)
+            template_path = self._templates_dir / template_name
+            template = load_template(template_path)
             shot_count = len(template.slots)
             event_id = event.id
+            self._armed_template_path = template_path
+            self._armed_countdown_s = event.countdown_s
         self._shot_count = shot_count
 
         self._sessions.create(self._session_id, event_id=event_id, state=SessionState.ARMED.value)
@@ -177,7 +188,12 @@ class SessionManager:
         slot in the active template, landing in REVIEW only after the last
         shot's full-resolution download completes.
         """
-        duration = self._default_countdown_s if countdown_s is None else countdown_s
+        if countdown_s is not None:
+            duration = countdown_s
+        elif self._armed_countdown_s is not None:
+            duration = self._armed_countdown_s
+        else:
+            duration = self._default_countdown_s
         shot_count = self._shot_count
         capture_ids: list[str] = []
 
@@ -205,7 +221,11 @@ class SessionManager:
             try:
                 with spans.span(self._db, "capture.trigger", capture_id=self._session_id):
                     capture_id = await self._camera.trigger_capture()
-                self._captures.create(capture_id, self._session_id)
+                # A 1-slot template has no composite step below — this raw
+                # shot IS the deliverable. A multi-slot template composites
+                # these afterward, so each raw shot here is an input, not
+                # itself shown to the guest (see _finalize_capture).
+                self._captures.create(capture_id, self._session_id, is_deliverable=shot_count == 1)
 
                 with spans.span(self._db, "ptp.download_thumb", capture_id=capture_id):
                     preview = await self._camera.download_preview(capture_id)
@@ -244,9 +264,54 @@ class SessionManager:
                 await self._transition(SessionState.IDLE)
                 raise
 
-        self._session_capture_ids = capture_ids
-        share_token = self._issue_share_token_and_enqueue_uploads(capture_ids)
+        deliverable_id = await self._finalize_capture(capture_ids)
+        self._session_capture_ids = [deliverable_id]
+        share_token = self._issue_share_token_and_enqueue_uploads([deliverable_id])
         await self._transition(SessionState.REVIEW, share_token=share_token)
+
+    async def _finalize_capture(self, capture_ids: list[str]) -> str:
+        """Turns `capture_ids` (the raw shot(s) from the loop above) into
+        the one deliverable the guest sees/prints/shares.
+
+        A 1-slot template's single raw shot already IS the deliverable
+        (`captures.create` above already marked it so) — return it as-is,
+        matching the exact pre-compositor behaviour for single-shot modes.
+
+        A multi-slot template (collage/strip) renders all its shots into
+        the template's composite via `pipeline.compositor.render_variant`
+        (off the event loop — pyvips compositing is CPU-bound), saves it as
+        a new capture_id, marks THAT row deliverable, and broadcasts one
+        more FullImageReady for it — Kiosk.svelte's `FullImageReady`
+        handler unconditionally overwrites the review image on every event,
+        so this final broadcast is what ends up shown/printed/shared,
+        without any frontend change needed.
+        """
+        if self._armed_template_path is None or len(capture_ids) == 1:
+            return capture_ids[0]
+
+        assert self._events_dir is not None  # armed_template_path implies this
+        event = load_event(self._events_dir, self._active_event_id)
+        source_paths = [self._captures_dir / f"{cid}.jpg" for cid in capture_ids]
+        composite_bytes = await asyncio.to_thread(
+            render_variant,
+            self._armed_template_path,
+            source_paths,
+            "print",
+            event,
+            self._events_dir,
+        )
+        composite_id = uuid.uuid4().hex
+        composite_path = self._captures_dir / f"{composite_id}.jpg"
+        composite_path.write_bytes(composite_bytes)
+        self._captures.create(composite_id, self._session_id, is_deliverable=True)
+        await self.broadcast(
+            FullImageReady(
+                session_id=self._session_id,
+                capture_id=composite_id,
+                image_url=f"/captures/{composite_id}.jpg",
+            )
+        )
+        return composite_id
 
     def _issue_share_token_and_enqueue_uploads(self, capture_ids: list[str]) -> str | None:
         """Runs once, right after the last shot lands and before REVIEW

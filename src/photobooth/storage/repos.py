@@ -70,11 +70,20 @@ class CaptureRepo:
     def __init__(self, db: sqlite3.Connection) -> None:
         self._db = db
 
-    def create(self, capture_id: str, session_id: str) -> None:
+    def create(self, capture_id: str, session_id: str, *, is_deliverable: bool = True) -> None:
+        """`is_deliverable=False` marks a raw per-slot shot that only feeds
+        a composite (multi-shot collage/strip) — not directly shown to a
+        guest. Call `mark_deliverable()` once the real deliverable (the
+        composite, or this same row for a 1-slot template) is known. See
+        `web/session.py`'s `capture()`."""
         self._db.execute(
-            "INSERT INTO captures (id, session_id, created_at) VALUES (?, ?, ?)",
-            (capture_id, session_id, datetime.now(UTC).isoformat()),
+            "INSERT INTO captures (id, session_id, created_at, is_deliverable) VALUES (?, ?, ?, ?)",
+            (capture_id, session_id, datetime.now(UTC).isoformat(), int(is_deliverable)),
         )
+        self._db.commit()
+
+    def mark_deliverable(self, capture_id: str) -> None:
+        self._db.execute("UPDATE captures SET is_deliverable = 1 WHERE id = ?", (capture_id,))
         self._db.commit()
 
     def list_older_than(self, cutoff_iso: str) -> list[str]:
@@ -111,7 +120,7 @@ class CaptureRepo:
         rows = self._db.execute(
             "SELECT captures.id, captures.created_at FROM captures "
             "JOIN sessions ON captures.session_id = sessions.id "
-            "WHERE sessions.event_id = ? "
+            "WHERE sessions.event_id = ? AND captures.is_deliverable = 1 "
             "ORDER BY captures.created_at DESC",
             (event_id,),
         ).fetchall()
@@ -138,7 +147,9 @@ class CaptureRepo:
         recent first. Additive — doesn't touch the write-path methods above.
         """
         rows = self._db.execute(
-            "SELECT id, created_at FROM captures WHERE session_id = ? ORDER BY created_at DESC",
+            "SELECT id, created_at FROM captures "
+            "WHERE session_id = ? AND is_deliverable = 1 "
+            "ORDER BY created_at DESC",
             (session_id,),
         ).fetchall()
         return [(row[0], row[1]) for row in rows]

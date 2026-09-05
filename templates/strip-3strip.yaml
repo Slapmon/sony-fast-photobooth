@@ -13,6 +13,11 @@ slots:
   - { x: 30, y: 1210, w: 540, h: 560, fit: cover }
 overlays:
   - { type: image, src: "assets/frame.png", x: 0, y: 0, w: 600, h: 1800 }
+  # Event's logo (EventConfig.logo_image), bottom-right, only when the
+  # event turns on `include_logo_in_prints` — renders nothing otherwise.
+  # Box is fit-within (aspect preserved), not stretched — see
+  # pipeline/compositor.py's LogoOverlay handling.
+  - { type: logo, x: 400, y: 1660, w: 180, h: 120 }
   - type: text
     content: "{event.title} · {event.date}"
     # PLACEHOLDER — not a real font file, just satisfies load-time existence
