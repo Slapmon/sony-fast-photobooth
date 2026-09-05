@@ -130,10 +130,32 @@ class GphotoBackend(CameraBackend):
         except gp.GPhoto2Error as exc:
             raise CameraError(f"autofocus trigger failed: {exc}") from exc
 
+    def _drain_stale_events(self, camera: gp.Camera) -> None:
+        """Discard any camera events already queued before we trigger a new
+        capture — most commonly a `GP_EVENT_FILE_ADDED` left over from a
+        photo taken with the camera's own physical shutter button while
+        this process still held the PTP connection. Without this, the very
+        next `trigger_capture()` call's `wait_for_event()` loop below picks
+        up that STALE event instead of the fresh one it's about to cause,
+        which is silently accepted as if it were the new shot's file. Once
+        that happens the offset never self-corrects: every subsequent
+        capture keeps returning the previous shot's file, one behind,
+        until the camera is reconnected — exactly the "it always shows the
+        previous picture" bug this fixes. A near-zero timeout here only
+        drains what's ALREADY sitting in the queue; it returns immediately
+        (GP_EVENT_TIMEOUT) on the normal case of an empty queue.
+        """
+        gp = self._gp
+        while True:
+            event_type, _ = camera.wait_for_event(10)
+            if event_type == gp.GP_EVENT_TIMEOUT:
+                return
+
     def trigger_capture(self) -> str:
         camera = self._require_camera()
         gp = self._gp
         try:
+            self._drain_stale_events(camera)
             camera.trigger_capture()
 
             deadline = time.monotonic() + _EVENT_WAIT_BUDGET_S
