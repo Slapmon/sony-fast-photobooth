@@ -129,13 +129,25 @@ def _load_private_key(path: Path) -> paramiko.PKey:
     """Try every key type paramiko supports, in rough order of how common
     each is for a freshly generated "upload account" key today (Ed25519 is
     the modern default from `ssh-keygen`, RSA the long-standing one; ECDSA
-    and DSA are rarer but cheap to also try). Raises the last error if none
-    load — a single hardcoded `RSAKey.from_private_key_file` (the previous
-    behavior) would silently fail for anyone who generated an Ed25519 key,
-    which is now the common case."""
+    rarer but cheap to also try). Raises the last error if none load — a
+    single hardcoded `RSAKey.from_private_key_file` (the previous behavior)
+    would silently fail for anyone who generated an Ed25519 key, which is
+    now the common case.
+
+    `DSSKey` (DSA) is deliberately NOT in this list: DSA is obsolete/
+    insecure, and paramiko 5.0+ removed the class entirely — a hardcoded
+    reference to `paramiko.DSSKey` raised `AttributeError` on any
+    environment running that version rather than falling through cleanly.
+    `getattr` here means this also works fine on an older paramiko that
+    still has it, without hardcoding a version check.
+    """
     import paramiko
 
-    key_classes = (paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.RSAKey, paramiko.DSSKey)
+    key_classes = [paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.RSAKey]
+    dss_key_class = getattr(paramiko, "DSSKey", None)
+    if dss_key_class is not None:
+        key_classes.append(dss_key_class)
+
     last_error: Exception | None = None
     for key_class in key_classes:
         try:

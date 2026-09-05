@@ -199,6 +199,39 @@ def test_load_private_key_falls_back_through_key_types(
     fake_paramiko.DSSKey.from_private_key_file.assert_not_called()
 
 
+def test_load_private_key_works_when_paramiko_has_no_dsskey(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test for the real bug this shipped with: paramiko 5.0+
+    removed `DSSKey` entirely (DSA is obsolete/insecure) — a hardcoded
+    `paramiko.DSSKey` reference in the key-type fallback list raised
+    `AttributeError` on that version instead of falling through to a key
+    type that actually exists. `spec=[...]` here (unlike the plain
+    `MagicMock()` above) means accessing `.DSSKey` genuinely raises
+    `AttributeError`, matching real paramiko 5.0+.
+    """
+    fake_paramiko = MagicMock(spec=["SSHException", "Ed25519Key", "ECDSAKey", "RSAKey"])
+    fake_paramiko.SSHException = real_paramiko.SSHException
+    fake_paramiko.Ed25519Key.from_private_key_file.side_effect = real_paramiko.SSHException(
+        "not ed25519"
+    )
+    fake_paramiko.ECDSAKey.from_private_key_file.side_effect = real_paramiko.SSHException(
+        "not ecdsa"
+    )
+    fake_rsa_key = MagicMock()
+    fake_paramiko.RSAKey.from_private_key_file.return_value = fake_rsa_key
+    monkeypatch.setitem(sys.modules, "paramiko", fake_paramiko)
+
+    import photobooth.delivery.backend as backend_module
+
+    key_path = tmp_path / "id_rsa"
+    key_path.write_text("fake key material")
+
+    result = backend_module._load_private_key(key_path)
+
+    assert result is fake_rsa_key
+
+
 def test_load_private_key_raises_last_error_when_no_type_matches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
