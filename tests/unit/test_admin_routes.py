@@ -858,3 +858,99 @@ def test_reprint_succeeds_and_bypasses_the_guest_print_limit(
         assert len(printer.jobs) == 3
     finally:
         (admin.CAPTURES_DIR / f"{capture_id}.jpg").unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Gallery management: list + delete captures
+# ---------------------------------------------------------------------------
+
+
+def test_list_event_captures_returns_that_events_captures(
+    client: TestClient, db_conn: sqlite3.Connection
+) -> None:
+    SessionRepo(db_conn).create("gallery-session", event_id="test-event", state="review")
+    CaptureRepo(db_conn).create("gallery-capture-1", "gallery-session")
+    _login(client)
+
+    response = client.get("/admin/events/test-event/captures")
+    assert response.status_code == 200
+    ids = [c["id"] for c in response.json()]
+    assert ids == ["gallery-capture-1"]
+
+
+def test_list_event_captures_404s_for_unknown_event(client: TestClient) -> None:
+    _login(client)
+    response = client.get("/admin/events/does-not-exist/captures")
+    assert response.status_code == 404
+
+
+def test_list_event_captures_ignores_gallery_enabled_toggle(
+    client: TestClient, db_conn: sqlite3.Connection, events_dir: Path
+) -> None:
+    # Unlike GET /gallery/{event_id}/captures, the admin listing must still
+    # work for an event whose public gallery is turned off — an operator
+    # needs to review/delete photos regardless of that guest-facing switch.
+    hidden_dir = events_dir / "hidden-event"
+    hidden_dir.mkdir()
+    (hidden_dir / "event.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": "hidden-event",
+                "title": "Hidden",
+                "template": "single.yaml",
+                "gallery_enabled": False,
+            }
+        )
+    )
+    SessionRepo(db_conn).create("hidden-session", event_id="hidden-event", state="review")
+    CaptureRepo(db_conn).create("hidden-capture-1", "hidden-session")
+    _login(client)
+
+    response = client.get("/admin/events/hidden-event/captures")
+    assert response.status_code == 200
+    assert [c["id"] for c in response.json()] == ["hidden-capture-1"]
+
+
+def test_delete_capture_action_removes_row_and_files(
+    client: TestClient, db_conn: sqlite3.Connection
+) -> None:
+    SessionRepo(db_conn).create("delete-session", event_id="test-event", state="review")
+    CaptureRepo(db_conn).create("delete-capture-1", "delete-session")
+    (admin.CAPTURES_DIR / "delete-capture-1.jpg").write_bytes(_real_jpeg_bytes())
+    (admin.CAPTURES_DIR / "delete-capture-1-preview.jpg").write_bytes(_real_jpeg_bytes())
+    _login(client)
+
+    response = client.delete("/admin/captures/delete-capture-1")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+    assert not (admin.CAPTURES_DIR / "delete-capture-1.jpg").exists()
+    assert not (admin.CAPTURES_DIR / "delete-capture-1-preview.jpg").exists()
+    row = db_conn.execute(
+        "SELECT id FROM captures WHERE id = ?", ("delete-capture-1",)
+    ).fetchone()
+    assert row is None
+
+    # Confirm it no longer shows up in the admin gallery listing either.
+    listing = client.get("/admin/events/test-event/captures")
+    assert "delete-capture-1" not in [c["id"] for c in listing.json()]
+
+
+def test_delete_capture_action_is_tolerant_of_missing_files(
+    client: TestClient, db_conn: sqlite3.Connection
+) -> None:
+    # No on-disk files written for this one — delete_capture() must not
+    # blow up on FileNotFoundError, matching the retention sweep's contract.
+    SessionRepo(db_conn).create("delete-session-2", event_id="test-event", state="review")
+    CaptureRepo(db_conn).create("delete-capture-2", "delete-session-2")
+    _login(client)
+
+    response = client.delete("/admin/captures/delete-capture-2")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_delete_capture_action_404s_for_unknown_capture(client: TestClient) -> None:
+    _login(client)
+    response = client.delete("/admin/captures/does-not-exist")
+    assert response.status_code == 404

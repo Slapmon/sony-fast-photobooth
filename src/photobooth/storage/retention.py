@@ -50,6 +50,29 @@ from photobooth.storage.repos import CaptureRepo
 logger = structlog.get_logger(__name__)
 
 
+def delete_capture(db: sqlite3.Connection, captures_dir: Path, capture_id: str) -> None:
+    """Delete one capture's on-disk files and DB row as a unit. Shared by
+    the retention sweep below and the admin panel's manual gallery-delete
+    action (web/routers/admin.py) — same "tolerant of a missing file"
+    behavior either way: a capture might have only a full JPEG and no
+    `-preview.jpg` (or vice versa), and that must never abort the delete.
+    """
+    for suffix in (".jpg", "-preview.jpg"):
+        path = captures_dir / f"{capture_id}{suffix}"
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning(
+                "capture_file_delete_failed",
+                capture_id=capture_id,
+                path=str(path),
+                error=str(exc),
+            )
+    CaptureRepo(db).delete(capture_id)
+
+
 def run_retention_sweep_once(
     db: sqlite3.Connection, captures_dir: Path, config: RetentionConfig
 ) -> int:
@@ -74,24 +97,10 @@ def run_retention_sweep_once(
     cutoff = datetime.now(UTC) - timedelta(days=config.max_age_days)
     cutoff_iso = cutoff.isoformat()
 
-    repo = CaptureRepo(db)
-    stale_ids = repo.list_older_than(cutoff_iso)
+    stale_ids = CaptureRepo(db).list_older_than(cutoff_iso)
 
     for capture_id in stale_ids:
-        for suffix in (".jpg", "-preview.jpg"):
-            path = captures_dir / f"{capture_id}{suffix}"
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
-            except OSError as exc:
-                logger.warning(
-                    "retention_file_delete_failed",
-                    capture_id=capture_id,
-                    path=str(path),
-                    error=str(exc),
-                )
-        repo.delete(capture_id)
+        delete_capture(db, captures_dir, capture_id)
         logger.info("retention_capture_deleted", capture_id=capture_id)
 
     return len(stale_ids)

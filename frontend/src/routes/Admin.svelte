@@ -18,17 +18,27 @@
   import ActionsPanel from '../lib/admin/ActionsPanel.svelte'
   import DeliveryPanel from '../lib/admin/DeliveryPanel.svelte'
   import EventsPanel from '../lib/admin/EventsPanel.svelte'
+  import GalleryPanel from '../lib/admin/GalleryPanel.svelte'
   import PreflightPanel from '../lib/admin/PreflightPanel.svelte'
   import StatusPanel from '../lib/admin/StatusPanel.svelte'
   import TemplatesPanel from '../lib/admin/TemplatesPanel.svelte'
   import TimingsPanel from '../lib/admin/TimingsPanel.svelte'
 
-  type Tab = 'events' | 'templates' | 'delivery' | 'status' | 'actions' | 'preflight' | 'timings'
+  type Tab =
+    | 'events'
+    | 'templates'
+    | 'delivery'
+    | 'gallery'
+    | 'status'
+    | 'actions'
+    | 'preflight'
+    | 'timings'
 
   const TABS: { id: Tab; label: string }[] = [
     { id: 'events', label: 'Events' },
     { id: 'templates', label: 'Templates' },
     { id: 'delivery', label: 'Delivery' },
+    { id: 'gallery', label: 'Gallery' },
     { id: 'status', label: 'Status' },
     { id: 'actions', label: 'Actions' },
     { id: 'preflight', label: 'Preflight' },
@@ -135,6 +145,8 @@
         <TemplatesPanel />
       {:else if activeTab === 'delivery'}
         <DeliveryPanel />
+      {:else if activeTab === 'gallery'}
+        <GalleryPanel />
       {:else if activeTab === 'status'}
         <StatusPanel />
       {:else if activeTab === 'actions'}

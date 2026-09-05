@@ -54,6 +54,7 @@ from photobooth.pipeline.compositor import render_variant
 from photobooth.pipeline.template import TemplateValidationError, load_template
 from photobooth.printing.backend import PrinterBackend
 from photobooth.storage.repos import CaptureRepo
+from photobooth.storage.retention import delete_capture
 from photobooth.web import health_checks
 from photobooth.web.routers.admin_auth import require_admin
 from photobooth.web.session import SessionManager
@@ -461,6 +462,49 @@ def test_delivery(request: Request) -> dict[str, Any]:
         "ok": False,
         "detail": f"no connection test implemented yet for backend {config.backend!r}",
     }
+
+
+# ---------------------------------------------------------------------------
+# Gallery management: list + delete an event's captures
+# ---------------------------------------------------------------------------
+
+
+@router.get("/events/{event_id}/captures")
+def list_event_captures(
+    event_id: str, request: Request, settings: SettingsDep
+) -> list[dict[str, str]]:
+    """Admin-scoped equivalent of GET /gallery/{event_id}/captures (same
+    response shape) but does NOT gate on EventConfig.gallery_enabled — an
+    operator must be able to review and delete photos even for an event
+    whose public-facing gallery is turned off. 404s only when the event
+    itself doesn't exist.
+    """
+    event_dir = settings.events.base_dir / event_id
+    if not event_dir.is_dir():
+        raise HTTPException(status_code=404, detail="event not found")
+    db = request.app.state.db
+    captures = CaptureRepo(db).list_by_event(event_id)
+    return [
+        {"id": capture_id, "created_at": created_at, "image_url": f"/captures/{capture_id}.jpg"}
+        for capture_id, created_at in captures
+    ]
+
+
+@router.delete("/captures/{capture_id}")
+def delete_capture_action(capture_id: str, request: Request) -> dict[str, bool]:
+    """Removes one capture's on-disk files and DB row — an explicit
+    operator action, distinct from the automatic retention sweep
+    (storage/retention.py), which shares this exact same delete logic
+    (`delete_capture()`). Scoped to the LOCAL copy only: this does not
+    attempt to remove a copy already delivered to a remote SFTP/S3 target
+    (the guest may already have that link/file; deleting it out from under
+    them is a separate, not-currently-requested feature).
+    """
+    db = request.app.state.db
+    if CaptureRepo(db).get_session_id(capture_id) is None:
+        raise HTTPException(status_code=404, detail="capture not found")
+    delete_capture(db, CAPTURES_DIR, capture_id)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
