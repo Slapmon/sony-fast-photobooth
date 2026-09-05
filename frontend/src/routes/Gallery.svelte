@@ -93,6 +93,12 @@
     // Already here — a no-op, the button just reads as "active".
   }
 
+  function handleBack() {
+    // Plain "return to the attract screen" — deliberately not one of the
+    // mode buttons (those immediately start a new capture via `?mode=`).
+    window.location.href = '/'
+  }
+
   $effect(() => {
     loadGallery()
   })
@@ -102,6 +108,8 @@
 
 <div class="page" style={themeStyle(info?.theme)}>
   <EventBackground info={info} />
+
+  <button class="back-btn" onclick={handleBack}>&larr; Back</button>
 
   <section class="gallery">
     <h1 class="heading">
@@ -165,6 +173,35 @@
     padding: 1.5rem clamp(1rem, 4vw, 3rem) 8rem;
     box-sizing: border-box;
     color: #fff;
+  }
+
+  .back-btn {
+    position: fixed;
+    top: 1.25rem;
+    left: 1.25rem;
+    z-index: 6;
+    font-size: 1rem;
+    font-weight: 600;
+    padding: 0.6rem 1.2rem;
+    border-radius: var(--radius);
+    border: 1.5px solid rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+    cursor: pointer;
+    box-shadow: var(--shadow-sm);
+    transition:
+      background-color 200ms var(--ease-spring),
+      transform 150ms var(--ease-spring),
+      border-color 200ms var(--ease-spring);
+  }
+
+  .back-btn:hover {
+    background: rgba(255, 255, 255, 0.18);
+    border-color: #fff;
+  }
+
+  .back-btn:active {
+    transform: scale(0.96);
   }
 
   .heading {
