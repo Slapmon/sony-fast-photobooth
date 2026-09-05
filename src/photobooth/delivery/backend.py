@@ -158,6 +158,36 @@ def _load_private_key(path: Path) -> paramiko.PKey:
     raise last_error
 
 
+def _authenticate(transport: paramiko.Transport, cfg: SftpDeliveryConfig) -> None:
+    import paramiko
+
+    if cfg.private_key_path:
+        pkey = _load_private_key(cfg.private_key_path)
+        transport.connect(username=cfg.username, pkey=pkey)
+        return
+
+    try:
+        transport.connect(username=cfg.username, password=cfg.password)
+    except paramiko.AuthenticationException:
+        # Many shared-hosting/cPanel-style SFTP accounts only accept
+        # "keyboard-interactive" auth, not plain "password" —
+        # Transport.connect()'s shortcut only ever tries one method, so a
+        # perfectly correct password against one of these hosts surfaces
+        # as a plain "Authentication failed" here. The transport itself is
+        # still connected after a failed auth attempt (only the network
+        # link closing would break it), so retry on the SAME transport
+        # with the identical password via keyboard-interactive before
+        # giving up — if the server doesn't support that either, this
+        # raises its own AuthenticationException, which is the real
+        # "credentials are wrong" signal.
+        def _keyboard_interactive_handler(
+            title: str, instructions: str, prompt_list: list[tuple[str, bool]]
+        ) -> list[str]:
+            return [cfg.password for _ in prompt_list]
+
+        transport.auth_interactive(cfg.username, _keyboard_interactive_handler)
+
+
 def _open_sftp(cfg: SftpDeliveryConfig) -> tuple[paramiko.Transport, paramiko.SFTPClient]:
     """Shared connect+auth routine for both a real upload (`SftpBackend`)
     and the admin panel's "Test Connection" check (`test_sftp_connection`)
@@ -166,11 +196,7 @@ def _open_sftp(cfg: SftpDeliveryConfig) -> tuple[paramiko.Transport, paramiko.SF
 
     transport = paramiko.Transport((cfg.host, cfg.port))
     try:
-        if cfg.private_key_path:
-            pkey = _load_private_key(cfg.private_key_path)
-            transport.connect(username=cfg.username, pkey=pkey)
-        else:
-            transport.connect(username=cfg.username, password=cfg.password)
+        _authenticate(transport, cfg)
         sftp = paramiko.SFTPClient.from_transport(transport)
         if sftp is None:
             raise OSError(f"could not open SFTP session to {cfg.host}")

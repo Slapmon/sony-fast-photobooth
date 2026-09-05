@@ -173,6 +173,65 @@ def test_sftp_connection_raises_on_connect_failure(monkeypatch: pytest.MonkeyPat
         backend_module.test_sftp_connection(cfg)
 
 
+def test_sftp_falls_back_to_keyboard_interactive_when_password_auth_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test for a real report: many SFTP hosts (shared
+    hosting/cPanel-style accounts especially) only accept
+    keyboard-interactive auth, not plain "password" — paramiko's
+    `Transport.connect()` shortcut only ever tries one method, so a
+    perfectly correct password against one of these hosts surfaces as
+    `AuthenticationException` here. `_authenticate()` must retry the same
+    password via `auth_interactive` on the SAME transport before giving up.
+    """
+    fake_sftp_client = MagicMock()
+    fake_transport = MagicMock()
+    fake_transport.connect.side_effect = real_paramiko.AuthenticationException(
+        "authentication failed"
+    )
+    fake_paramiko = MagicMock()
+    fake_paramiko.AuthenticationException = real_paramiko.AuthenticationException
+    fake_paramiko.Transport.return_value = fake_transport
+    fake_paramiko.SFTPClient.from_transport.return_value = fake_sftp_client
+    monkeypatch.setitem(sys.modules, "paramiko", fake_paramiko)
+
+    import photobooth.delivery.backend as backend_module
+
+    cfg = SftpDeliveryConfig(host="sftp.example.com", username="booth", password="secret")
+
+    backend_module.test_sftp_connection(cfg)  # must not raise
+
+    fake_transport.connect.assert_called_once_with(username="booth", password="secret")
+    fake_transport.auth_interactive.assert_called_once()
+    call_args = fake_transport.auth_interactive.call_args
+    assert call_args[0][0] == "booth"
+    handler = call_args[0][1]
+    assert handler("title", "instructions", [("Password:", False)]) == ["secret"]
+
+
+def test_sftp_raises_when_keyboard_interactive_fallback_also_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_transport = MagicMock()
+    fake_transport.connect.side_effect = real_paramiko.AuthenticationException(
+        "authentication failed"
+    )
+    fake_transport.auth_interactive.side_effect = real_paramiko.AuthenticationException(
+        "authentication failed"
+    )
+    fake_paramiko = MagicMock()
+    fake_paramiko.AuthenticationException = real_paramiko.AuthenticationException
+    fake_paramiko.Transport.return_value = fake_transport
+    monkeypatch.setitem(sys.modules, "paramiko", fake_paramiko)
+
+    import photobooth.delivery.backend as backend_module
+
+    cfg = SftpDeliveryConfig(host="sftp.example.com", username="booth", password="wrong")
+
+    with pytest.raises(real_paramiko.AuthenticationException):
+        backend_module.test_sftp_connection(cfg)
+
+
 def test_load_private_key_falls_back_through_key_types(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
